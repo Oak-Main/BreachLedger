@@ -38,6 +38,7 @@ const FILES = [
   'packages/schema/sql.js',
   'packages/schema/seed/load.js',
   'packages/severity/score.js',
+  'scripts/refresh-receipt.js',
   'workers/api/src/index.js',
   'workers/alerts/src/index.js',
   'workers/ingest-cron/src/index.js',

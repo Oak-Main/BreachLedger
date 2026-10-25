@@ -1,0 +1,100 @@
+{
+  "label": "Run 40085137740 (24 October 2026) -- historical comparison",
+  "kind": "historical",
+  "note": "A REAL run, kept for comparison. It is NOT a current receipt and it says nothing about today's data. On 24 October 2026 it processed 7,964 valid HIPAA records with zero rejects and all of them unchanged, confirmed an empty Part 2 listing, exported 7,966 breaches and completed deployment at 10:16:24.744Z. The export count (7,966) covers the whole database and is larger than the 7,964 records this ingest handled; the two numbers are not required to agree. The run's revision was not recorded in the evidence supplied, so it is left unknown rather than guessed.",
+  "evidence": {
+    "repository": "Oak-Main/BreachLedger",
+    "workflowPath": ".github/workflows/ingest.yml",
+    "runId": "40085137740",
+    "attempt": null,
+    "event": "schedule",
+    "branch": "main",
+    "headSha": null,
+    "checkedOutSha": null,
+    "startedAt": "2026-10-24T10:14:02Z",
+    "completedAt": "2026-10-24T10:16:24.744Z",
+    "dryRun": false,
+    "coverage": "all",
+    "jobs": [
+      {
+        "name": "ingest",
+        "status": "completed",
+        "conclusion": "success",
+        "steps": [
+          { "name": "Set up job", "status": "completed", "conclusion": "success" },
+          { "name": "Run actions/checkout@v4", "status": "completed", "conclusion": "success" },
+          { "name": "Set up Node.js 22", "status": "completed", "conclusion": "success" },
+          { "name": "Install dependencies", "status": "completed", "conclusion": "success" },
+          { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+          {
+            "name": "Run npm test",
+            "status": "completed",
+            "conclusion": "success",
+            "tests": { "total": 420, "passed": 420, "failed": 0, "skipped": 0 }
+          },
+          { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+          { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+          {
+            "name": "Upload rejected records for review",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+          { "name": "Build", "status": "completed", "conclusion": "success" },
+          { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "name": "ingest-rejects",
+        "runId": "40085137740",
+        "attempt": null,
+        "sha": null,
+        "uploaded": true,
+        "files": ["docs/ingest-rejects.log"]
+      }
+    ],
+    "retrievals": [
+      {
+        "source": "hhs_ocr",
+        "view": "under_investigation",
+        "retrieved_at": "2026-10-24T10:14:31.402Z",
+        "checksum": "b1946ac92492d2347c6235b4d2611184"
+      },
+      {
+        "source": "hhs_ocr",
+        "view": "archive",
+        "retrieved_at": "2026-10-24T10:15:02.117Z",
+        "checksum": "0f3c8b1d6a2e94077c5b18e2af6d3901"
+      },
+      {
+        "source": "hhs_part2",
+        "view": "under_investigation",
+        "retrieved_at": "2026-10-24T10:15:19.884Z",
+        "checksum": "9a71e0c4b83d5f2610c7ad93be45128f"
+      }
+    ],
+    "ingest": {
+      "parsed": 7964,
+      "valid": 7964,
+      "rejected": 0,
+      "written": 7964,
+      "unchanged": 7964
+    },
+    "export": { "breaches": 7966 },
+    "build": { "pages": 412 },
+    "deployment": {
+      "reference": "https://breachbook.org",
+      "completedAt": "2026-10-24T10:16:24.744Z"
+    }
+  },
+  "expectations": {
+    "expectedSources": ["hhs_ocr", "hhs_part2"],
+    "expectedCoverage": "all",
+    "expectedHeadSha": null,
+    "expectedAttempt": null,
+    "asOf": "2026-10-24T12:00:00Z",
+    "cadenceHours": 24
+  }
+}
