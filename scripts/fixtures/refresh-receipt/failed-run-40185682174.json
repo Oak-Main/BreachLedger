@@ -61,6 +61,11 @@
     "expectedHeadSha": "3f51cbc4e7df9083cb055244335847fe9c2365c5",
     "expectedAttempt": 1,
     "asOf": "2026-10-25T12:00:00Z",
-    "cadenceHours": 24
+    "cadenceHours": 24,
+    "lastSuccessful": {
+      "runId": "40085137740",
+      "attempt": null,
+      "completedAt": "2026-10-24T10:16:24.744Z"
+    }
   }
 }

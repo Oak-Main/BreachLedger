@@ -106,9 +106,17 @@ test('the recorded failure leaves freshness unknown rather than borrowing it fro
   assert.equal(receipt.freshness.verdict, 'unknown');
   assert.equal(receipt.freshness.asOf, '2026-10-25T12:00:00Z');
   assert.equal(receipt.freshness.bySource.length, 0);
-  // There is no successful refresh to point at.
-  assert.equal(receipt.lastSuccessfulRefresh.verdict, 'unknown');
-  assert.equal(receipt.lastSuccessfulRefresh.runId, null);
+  // Naming the earlier successful run must NOT smuggle its retrieval evidence,
+  // its counts or its freshness into this run. The failed run observed nothing,
+  // so it reports nothing.
+  assert.equal(receipt.lastSuccessfulRefresh.verdict, 'reported');
+  assert.equal(receipt.lastSuccessfulRefresh.runId, '40085137740');
+  assert.equal(receipt.retrievals.length, 0);
+  assert.equal(receipt.ingest.written, null);
+  assert.equal(receipt.ingest.unchanged, null);
+  assert.equal(receipt.export.breaches, null);
+  assert.equal(receipt.build.pages, null);
+  assert.equal(receipt.deployment.verdict, 'skipped');
 });
 
 test('the recorded failure names the missing proof instead of implying a refresh', () => {
@@ -182,11 +190,34 @@ test('the historical run left its revision unknown rather than guessing one', ()
 
 test('the last successful refresh is kept separate from the last attempt', () => {
   // The recorded failure: attempted, but not successful. The last successful
-  // refresh stays unknown -- it cannot inherit anything from this run.
+  // refresh is the EARLIER run 40085137740, declared in the expectations from
+  // the sanitized historical evidence in this same repository -- it is a
+  // different run, and this failed run did not produce it.
   const failed = evaluateReceipt(FAILED_RUN);
   assert.equal(failed.refreshVerdict, 'failed');
-  assert.equal(failed.lastSuccessfulRefresh.verdict, 'unknown');
-  assert.equal(failed.lastSuccessfulRefresh.runId, null);
+  assert.equal(failed.publication.verdict, 'not_published');
+  assert.equal(failed.lastSuccessfulRefresh.verdict, 'reported');
+  assert.equal(failed.lastSuccessfulRefresh.runId, '40085137740');
+  // That earlier run's attempt number was never recorded, so it stays unknown
+  // rather than being guessed.
+  assert.equal(failed.lastSuccessfulRefresh.attempt, null);
+  assert.equal(failed.lastSuccessfulRefresh.completedAt, '2026-10-24T10:16:24.744Z');
+  // The two are genuinely different runs, and the failed attempt does not
+  // borrow the earlier run's verdict, counts or retrieval evidence.
+  assert.notEqual(failed.run.runId, failed.lastSuccessfulRefresh.runId);
+  assert.equal(failed.retrievals.length, 0);
+  assert.equal(failed.freshness.verdict, 'unknown');
+  assert.equal(failed.ingest.written, null);
+
+  // With no declared prior success, the checker must NOT invent one: it
+  // reports the last successful refresh as unknown.
+  const undeclared = JSON.parse(JSON.stringify(FAILED_RUN));
+  delete undeclared.expectations.lastSuccessful;
+  const blind = evaluateReceipt(undeclared);
+  assert.equal(blind.refreshVerdict, 'failed');
+  assert.equal(blind.lastSuccessfulRefresh.verdict, 'unknown');
+  assert.equal(blind.lastSuccessfulRefresh.runId, null);
+  assert.equal(blind.lastSuccessfulRefresh.completedAt, null);
 
   // The historical run succeeded, so it is the most recent successful refresh
   // this evidence covers.
@@ -194,6 +225,16 @@ test('the last successful refresh is kept separate from the last attempt', () =>
   assert.equal(ok.refreshVerdict, 'success');
   assert.equal(ok.lastSuccessfulRefresh.verdict, 'this_run');
   assert.equal(ok.lastSuccessfulRefresh.runId, '40085137740');
+});
+
+test('the readable assessment shows the last attempt and the last successful refresh as two different things', () => {
+  const text = renderAssessment(evaluateReceipt(FAILED_RUN));
+  // The attempt line reports this run's own outcome.
+  assert.match(text, /Last attempt: run 40185682174 \(attempt 1\)\s+verdict=failed\s+publication=not_published/);
+  // The successful-refresh line names the EARLIER run and its completion time,
+  // so a reader cannot mistake one for the other.
+  assert.match(text, /Last successful refresh: run 40085137740 \(attempt unknown\)\s+completedAt=2026-10-24T10:16:24\.744Z/);
+  assert.match(text, /this run did not produce it/);
 });
 
 // --- The synthetic cases ---------------------------------------------------

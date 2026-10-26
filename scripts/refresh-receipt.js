@@ -500,6 +500,7 @@ function evaluateReceipt(caseData) {
         attempt: isNumber(expectations.lastSuccessful.attempt) ? expectations.lastSuccessful.attempt : null,
         completedAt: expectations.lastSuccessful.completedAt ?? null,
         verdict: 'reported',
+        note: 'declared in the receipt expectations as an EARLIER successful refresh; this run did not produce it and did not inherit anything from it',
       }
       : (refreshVerdict === 'success'
         ? {
@@ -617,7 +618,11 @@ function renderAssessment(receipt) {
     for (const n of r.notes) lines.push(`  - ${n}`);
   }
   lines.push('');
-  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${r.lastSuccessfulRefresh.runId} (attempt ${r.lastSuccessfulRefresh.attempt})`}` +
+  lines.push(`Last attempt: run ${r.run.runId} (attempt ${r.run.attempt === null ? 'unknown' : r.run.attempt})` +
+    `  verdict=${r.refreshVerdict}  publication=${r.publication.verdict}` +
+    `  startedAt=${r.run.startedAt || 'unknown'}`);
+  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${r.lastSuccessfulRefresh.runId} (attempt ${r.lastSuccessfulRefresh.attempt === null ? 'unknown' : r.lastSuccessfulRefresh.attempt})`}` +
+    (r.lastSuccessfulRefresh.completedAt ? `  completedAt=${r.lastSuccessfulRefresh.completedAt}` : '') +
     (r.lastSuccessfulRefresh.note ? `  -- ${r.lastSuccessfulRefresh.note}` : ''));
   lines.push('This receipt evaluates LOCAL SAVED EVIDENCE ONLY. It is not a live observation of any provider,');
   lines.push('of D1, or of the deployed site, and it is not by itself operational acceptance.');
