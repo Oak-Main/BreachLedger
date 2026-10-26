@@ -137,6 +137,101 @@ function parseInstant(value) {
   return Number.isFinite(t) ? t : null;
 }
 
+// A production timestamp is `new Date().toISOString()`, which is always
+// exactly YYYY-MM-DDTHH:mm:ss.sssZ. Anything else is not something this
+// repository's code produced.
+const CANONICAL_ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+// `sha256(body)` in packages/ingest/fetch-util.js produces 64 lowercase hex.
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * Parse a canonical ISO-8601 UTC instant.
+ *
+ * `Date.parse` alone is not good enough: it accepts non-canonical shapes and
+ * it silently rolls an impossible calendar date over into the next month
+ * ("2026-02-30" becomes 2026-03-01). Both are ways for a receipt to look
+ * valid while describing an instant that never existed, so the value is
+ * round-tripped through `toISOString()` and compared with the input.
+ */
+function parseCanonicalInstant(value) {
+  if (typeof value !== 'string' || value === '') {
+    return { valid: false, ms: null, reason: 'is missing' };
+  }
+  if (!CANONICAL_ISO_UTC.test(value)) {
+    return { valid: false, ms: null, reason: 'is not a canonical ISO-8601 UTC instant' };
+  }
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) {
+    return { valid: false, ms: null, reason: 'is not a canonical ISO-8601 UTC instant' };
+  }
+  if (new Date(ms).toISOString() !== value) {
+    return { valid: false, ms: null, reason: 'is not a real calendar instant' };
+  }
+  return { valid: true, ms, reason: null };
+}
+
+/**
+ * Parse a reference instant (an `asOf`, or a run's completion time).
+ *
+ * These are expectations about a run rather than values this repository's own
+ * code stamped, so they are not held to the canonical millisecond shape -- but
+ * an impossible calendar date is still rejected, because "2026-02-30" parsing
+ * successfully into 2026-03-01 would silently change what a receipt means.
+ */
+function parseReferenceInstant(value) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { valid: false, ms: null, reason: 'is missing' };
+  }
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) {
+    return { valid: false, ms: null, reason: 'is not a valid instant' };
+  }
+  const declared = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (declared) {
+    const d = new Date(ms);
+    const actual = `${String(d.getUTCFullYear()).padStart(4, '0')}-` +
+      `${String(d.getUTCMonth() + 1).padStart(2, '0')}-` +
+      `${String(d.getUTCDate()).padStart(2, '0')}`;
+    if (actual !== `${declared[1]}-${declared[2]}-${declared[3]}`) {
+      return { valid: false, ms: null, reason: 'is not a real calendar instant' };
+    }
+  }
+  return { valid: true, ms, reason: null };
+}
+
+/**
+ * Validate one retrieval row against the run that claims it.
+ *
+ * A source NAME is not provenance. A row only counts as evidence when it
+ * carries a timestamp this repository could have produced, a checksum of the
+ * shape the ingester produces, and no binding that contradicts the run the
+ * receipt is about.
+ */
+function validateRetrievalRow(row, run) {
+  const reasons = [];
+  const instant = parseCanonicalInstant(row.retrieved_at);
+  if (!instant.valid) reasons.push(`retrieved_at ${instant.reason}`);
+
+  const checksum = typeof row.checksum === 'string' ? row.checksum : null;
+  if (checksum === null) {
+    reasons.push('checksum is missing');
+  } else if (!SHA256_HEX.test(checksum)) {
+    reasons.push('checksum is not a sha256 digest');
+  }
+
+  if (row.runId != null && run.runId != null && row.runId !== run.runId) {
+    reasons.push('the retrieval belongs to a different run');
+  }
+  if (row.attempt != null && run.attempt != null && row.attempt !== run.attempt) {
+    reasons.push('the retrieval belongs to a different attempt');
+  }
+  if (row.sha != null && run.headSha != null && row.sha !== run.headSha) {
+    reasons.push('the retrieval was produced from a different revision');
+  }
+
+  return { instant, checksum, reasons, valid: reasons.length === 0 };
+}
+
 /**
  * Evaluate one case and return a machine-readable receipt.
  *
@@ -239,13 +334,35 @@ function evaluateReceipt(caseData) {
   const retrievals = Array.isArray(evidence.retrievals) ? evidence.retrievals : [];
   const observedSources = [...new Set(retrievals.map((r) => r.source).filter(Boolean))];
   const observedViews = [...new Set(retrievals.map((r) => r.view).filter(Boolean))];
-  const missingSources = expectedSources.filter((s) => !observedSources.includes(s));
   const coverage = expectations.expectedCoverage ?? evidence.coverage ?? null;
+
+  // A source NAME is not provenance. A row counts only when it carries a
+  // timestamp this repository could have produced, a checksum of the shape the
+  // ingester produces, and no binding that contradicts this run.
+  const retrievalRows = retrievals.map((r) => {
+    const v = validateRetrievalRow(r, run);
+    return {
+      source: r.source ?? null,
+      view: r.view ?? null,
+      retrievedAt: r.retrieved_at ?? null,
+      checksum: r.checksum ?? null,
+      instant: v.instant,
+      valid: v.valid,
+      reasons: v.reasons,
+    };
+  });
+  const verifiedSources = [...new Set(retrievalRows.filter((r) => r.valid).map((r) => r.source).filter(Boolean))];
+  // Fail closed: a required source is covered only by VALIDATED evidence.
+  const missingSources = expectedSources.filter((s) => !verifiedSources.includes(s));
+  const unverifiedSources = expectedSources.filter((s) => observedSources.includes(s) && !verifiedSources.includes(s));
+  const invalidEvidence = retrievalRows.filter((r) => !r.valid);
 
   const sourceSelection = {
     expected: expectedSources,
     observed: observedSources,
+    verified: verifiedSources,
     missing: missingSources,
+    unverified: unverifiedSources,
     views: observedViews,
     coverage,
     note: 'coverage=current permits partial coverage; it does not prove which views were fetched',
@@ -253,28 +370,70 @@ function evaluateReceipt(caseData) {
 
   // --- Freshness ----------------------------------------------------------
   const asOf = expectations.asOf ?? null;
-  const asOfMs = parseInstant(asOf);
-  const cadenceHours = isNumber(expectations.cadenceHours) ? expectations.cadenceHours : 24;
-  const freshnessRows = retrievals.map((r) => {
-    const t = parseInstant(r.retrieved_at);
-    const ageMs = t !== null && asOfMs !== null ? asOfMs - t : null;
+  const asOfParsed = parseReferenceInstant(asOf);
+  const asOfMs = asOfParsed.valid ? asOfParsed.ms : null;
+  // An absent or non-positive cadence is not a freshness SLA. Defaulting one
+  // in would invent a threshold the repository does not define, so the verdict
+  // stays unknown instead.
+  const cadenceSupplied = expectations.cadenceHours;
+  const cadenceValid = isNumber(cadenceSupplied) && cadenceSupplied > 0;
+  const cadenceHours = cadenceValid ? cadenceSupplied : null;
+
+  const freshnessRows = retrievalRows.map((r) => {
+    let timing = 'invalid';
+    if (r.instant.valid) timing = 'valid';
+    else if (r.retrievedAt === null || r.retrievedAt === undefined) timing = 'missing';
+    // A retrieval stamped in the future has not happened yet. It is not
+    // "fresh" -- it is invalid evidence.
+    if (timing === 'valid' && asOfMs !== null && r.instant.ms > asOfMs) timing = 'future';
+    const ageMs = timing === 'valid' ? asOfMs - r.instant.ms : null;
     return {
-      source: r.source ?? null,
-      view: r.view ?? null,
-      retrievedAt: r.retrieved_at ?? null,
-      checksum: r.checksum ?? null,
+      source: r.source,
+      view: r.view,
+      retrievedAt: r.retrievedAt,
+      checksum: r.checksum,
+      timing,
+      valid: r.valid,
+      reasons: r.reasons,
       ageMs,
       ageHours: ageMs === null ? null : Number((ageMs / 3600000).toFixed(3)),
-      withinOneCadence: ageMs === null ? null : ageMs <= cadenceHours * 3600000,
+      withinOneCadence: (timing === 'valid' && cadenceValid) ? ageMs <= cadenceHours * 3600000 : null,
     };
   });
+
+  let freshnessVerdict = 'unknown';
+  const freshnessProblems = [];
+  if (!asOfParsed.valid) freshnessProblems.push(`the as-of instant ${asOfParsed.reason}`);
+  if (!cadenceValid) freshnessProblems.push('no positive cadence was supplied');
+  if (freshnessRows.length === 0) freshnessProblems.push('no retrieval evidence to age');
+  const provablyStale = freshnessRows.some((r) => r.timing === 'valid' && r.withinOneCadence === false);
+  const badTiming = freshnessRows.filter((r) => r.timing !== 'valid');
+
+  if (freshnessProblems.length === 0) {
+    if (provablyStale) {
+      freshnessVerdict = 'exceeds_cadence';
+    } else if (badTiming.length) {
+      // Invalid timing is unknown, NOT stale. Claiming "exceeds_cadence" here
+      // would assert a fact the evidence does not support.
+      freshnessVerdict = 'unknown';
+      freshnessProblems.push(`${badTiming.length} retrieval timestamp(s) are missing, malformed, impossible or in the future`);
+    } else {
+      freshnessVerdict = 'within_cadence';
+    }
+  }
+
   const freshness = {
     asOf,
     cadenceHours,
     bySource: freshnessRows,
-    verdict: asOfMs === null || freshnessRows.length === 0
-      ? 'unknown'
-      : (freshnessRows.every((r) => r.withinOneCadence === true) ? 'within_cadence' : 'exceeds_cadence'),
+    verdict: freshnessVerdict,
+    problems: freshnessProblems,
+    // When WE fetched the source is not when the publisher published it. A
+    // recent retrieval does not establish a recent source publication.
+    sourcePublication: {
+      established: false,
+      note: 'retrieved_at records when THIS WORKFLOW fetched the source. It is not the publisher\'s publication time, so a recent retrieval does not establish that the underlying source was recently published.',
+    },
     note: 'age is reported against the configured cadence; no freshness SLA is defined in this repository',
   };
 
@@ -311,6 +470,64 @@ function evaluateReceipt(caseData) {
     deployment.reference = null;
     deployment.completedAt = null;
   }
+
+  // --- Deployed-artifact identity ------------------------------------------
+  //
+  // "The deploy step succeeded and there is a URL" is a REPORT that something
+  // was published. It is not proof that the live artifact is the artifact this
+  // run built. The site's own origin is live whether or not any deployment
+  // ever ran, so a bare site URL is not identity proof at all.
+  //
+  // Identity is verified only when the evidence names the specific deployed
+  // artifact AND binds it to this run's revision.
+  const identityArtifactSha = typeof deploymentRef.artifactSha === 'string' ? deploymentRef.artifactSha : null;
+  const identityDeploymentId = typeof deploymentRef.deploymentId === 'string' ? deploymentRef.deploymentId : null;
+  const identityBoundSha = typeof deploymentRef.sha === 'string' ? deploymentRef.sha : null;
+
+  let referenceIsSiteOrigin = false;
+  if (typeof deployment.reference === 'string') {
+    try {
+      const u = new URL(deployment.reference);
+      referenceIsSiteOrigin = u.pathname === '' || u.pathname === '/';
+    } catch {
+      referenceIsSiteOrigin = false;
+    }
+  }
+
+  const identity = {
+    verdict: 'unknown',
+    reason: null,
+    artifactSha: identityArtifactSha,
+    deploymentId: identityDeploymentId,
+    boundSha: identityBoundSha,
+    referenceIsSiteOrigin,
+  };
+
+  if (!deployStage || deployStage.verdict !== 'success') {
+    identity.verdict = 'not_published';
+    identity.reason = 'the deploy stage did not succeed';
+  } else if (!deployment.reference) {
+    identity.verdict = 'unknown';
+    identity.reason = 'no deployment reference was recorded';
+  } else if (!identityArtifactSha && !identityDeploymentId) {
+    identity.verdict = 'unproven';
+    identity.reason = 'the deployment evidence names no deployed artifact (no artifact digest and no deployment id), so the reference cannot identify what was published';
+  } else if (!identityBoundSha) {
+    identity.verdict = 'unproven';
+    identity.reason = 'the deployed artifact is not bound to a revision, so it cannot be tied to this run';
+  } else if (run.headSha && identityBoundSha !== run.headSha) {
+    identity.verdict = 'unproven';
+    identity.reason = 'the deployed artifact was bound to a different revision';
+  } else if (!run.headSha) {
+    identity.verdict = 'unproven';
+    identity.reason = 'the run is not bound to a revision, so the deployed artifact cannot be tied to it';
+  } else {
+    identity.verdict = 'verified';
+  }
+  if (referenceIsSiteOrigin && identity.verdict !== 'verified') {
+    identity.reason += '; the reference is the site origin, which is live whether or not this run deployed anything';
+  }
+  deployment.identity = identity;
 
   // --- Artifacts ----------------------------------------------------------
   const artifacts = (Array.isArray(evidence.artifacts) ? evidence.artifacts : []).map((a) => {
@@ -371,6 +588,8 @@ function evaluateReceipt(caseData) {
   let refreshVerdict = 'unknown';
   let blockage = null;
   let failingStage = null;
+  let stageOutcome = 'unknown';
+  const provenanceProblems = [];
 
   if (revisionMatches === false || checkoutMatches === false || attemptMatches === false) {
     refreshVerdict = 'unknown';
@@ -380,6 +599,7 @@ function evaluateReceipt(caseData) {
     const failed = ordered.find((s) => s.verdict === 'failed' || s.verdict === 'cancelled');
     if (failed) {
       failingStage = failed.id;
+      stageOutcome = 'failed';
       refreshVerdict = 'failed';
       blockage = failed.id === 'credentials' || failed.id === 'tests'
         ? BLOCKAGE.BEFORE_INGESTION
@@ -390,6 +610,7 @@ function evaluateReceipt(caseData) {
       if (notDone) {
         // 'skipped' (the step ran as skipped), 'missing' (the step is not in
         // the evidence at all) and 'pending'/'unknown' are kept apart.
+        stageOutcome = 'incomplete';
         refreshVerdict = (notDone.verdict === 'pending' || notDone.verdict === 'unknown')
           ? 'unknown'
           : notDone.verdict;
@@ -398,19 +619,51 @@ function evaluateReceipt(caseData) {
         }
       } else {
         // Every required stage succeeded. That alone is still not proof of a
-        // refresh: the retrieval evidence has to be there, and it has to be
-        // for every source the run was supposed to ingest.
-        refreshVerdict = 'success';
+        // refresh. Matching source NAMES is not enough either: the retrieval
+        // evidence has to be there, it has to validate, and the run has to be
+        // bound to a revision and an attempt.
+        stageOutcome = 'all_succeeded';
         if (expectedSources.length === 0) {
-          refreshVerdict = 'unknown';
-          missingProof.push('no expected source list was supplied, so the retrieved source set cannot be checked');
+          provenanceProblems.push('no expected source list was supplied, so the retrieved source set cannot be checked');
         } else if (missingSources.length) {
-          refreshVerdict = 'unknown';
-          missingProof.push(`no retrieval evidence for required source(s): ${missingSources.join(', ')}`);
+          provenanceProblems.push(`no validated retrieval evidence for required source(s): ${missingSources.join(', ')}`);
+        }
+        if (invalidEvidence.length) {
+          provenanceProblems.push(
+            `${invalidEvidence.length} retrieval row(s) failed validation: ` +
+            invalidEvidence.map((r) => `${r.source ?? 'unknown source'} (${r.reasons.join('; ')})`).join(' | '),
+          );
+        }
+        // A retrieval stamped in the future is internally contradictory
+        // evidence: it describes a fetch that cannot have happened yet.
+        const futureRows = freshnessRows.filter((r) => r.timing === 'future');
+        if (futureRows.length) {
+          provenanceProblems.push(
+            `${futureRows.length} retrieval timestamp(s) are later than the as-of instant (${asOf}): ` +
+            futureRows.map((r) => `${r.source ?? 'unknown source'} at ${r.retrievedAt}`).join(' | '),
+          );
         }
         if (artifacts.some((a) => a.verdict === 'rejected')) {
+          provenanceProblems.push('an artifact belongs to a different run, attempt or revision');
+        }
+        // A verified-success claim has to be bound to a revision and an
+        // attempt. A run whose revision was never recorded cannot be quoted
+        // as a verified refresh of that revision.
+        const revisionBound = !!(run.headSha && run.checkedOutSha && run.headSha === run.checkedOutSha);
+        if (!revisionBound) {
+          provenanceProblems.push('the run is not bound to a single revision (its head SHA and checked-out SHA are not both recorded and equal)');
+        }
+        if (run.attempt === null) {
+          provenanceProblems.push('the run attempt is not recorded');
+        }
+        if (provenanceProblems.length) {
+          // Fail closed. "Every stage was green" is a fact about the stages.
+          // It is not a verified refresh, and missing or mismatched evidence
+          // must not be reported as one.
           refreshVerdict = 'unknown';
-          missingProof.push('an artifact belongs to a different run, attempt or revision');
+          for (const p of provenanceProblems) missingProof.push(p);
+        } else {
+          refreshVerdict = 'success';
         }
       }
     }
@@ -432,32 +685,130 @@ function evaluateReceipt(caseData) {
   if (dryRun) {
     publicationVerdict = 'not_published';
   } else if (deployStage && deployStage.verdict === 'success' && deployment.reference) {
-    publicationVerdict = 'published';
+    // The deploy step succeeded and a reference was recorded. Whether that
+    // reference identifies the artifact THIS RUN built is a separate claim.
+    publicationVerdict = identity.verdict === 'verified' ? 'published_verified' : 'published_reported';
   } else if (deployStage && ['skipped', 'missing', 'failed', 'cancelled'].includes(deployStage.verdict)) {
     // The deploy step did not publish: it was skipped, never ran, or failed.
     publicationVerdict = 'not_published';
   } else {
     publicationVerdict = 'unknown';
   }
+  const published = publicationVerdict === 'published_verified' || publicationVerdict === 'published_reported';
   const publication = {
     verdict: publicationVerdict,
-    reference: publicationVerdict === 'published' ? deployment.reference : null,
-    completedAt: publicationVerdict === 'published' ? deployment.completedAt : null,
+    // 'verified' | 'unproven' | 'not_published' | 'unknown'
+    identity: identity.verdict,
+    reference: published ? deployment.reference : null,
+    completedAt: published ? deployment.completedAt : null,
     note: dryRun
       ? 'a dry run is not a publication'
-      : null,
+      : (identity.reason || null),
   };
 
   // A deployment cannot be attributed to a revision or an attempt that does
   // not match the one the receipt is about. Downgrade it rather than let it
   // be quoted next to a mismatched SHA.
   if ((revisionMatches === false || checkoutMatches === false || attemptMatches === false)
-      && publication.verdict === 'published') {
+      && (publication.verdict === 'published_verified' || publication.verdict === 'published_reported')) {
     publication.verdict = 'unknown';
+    publication.identity = 'unknown';
     publication.reference = null;
     publication.completedAt = null;
     publication.note = 'the deployment cannot be attributed to the expected revision or attempt';
   }
+
+  // --- Which refresh is the most recent successful one? --------------------
+  //
+  // Candidates are the current run (when its stages all succeeded) and any
+  // EARLIER successful refresh declared in the expectations. The newest
+  // evidenced success wins -- but only when the ordering can be established.
+  // When it cannot, the uncertainty is preserved rather than guessed away,
+  // and an UNVERIFIED newer success never silently supersedes an earlier one.
+  const declaredSuccesses = Array.isArray(expectations.lastSuccessfulRefreshes)
+    ? expectations.lastSuccessfulRefreshes
+    : (expectations.lastSuccessful ? [expectations.lastSuccessful] : []);
+
+  const selectionCandidates = [];
+  if (stageOutcome === 'all_succeeded') {
+    const t = parseReferenceInstant(run.completedAt);
+    selectionCandidates.push({
+      source: 'this_run',
+      runId: run.runId,
+      attempt: run.attempt,
+      completedAt: run.completedAt,
+      orderMs: t.valid ? t.ms : null,
+      verified: refreshVerdict === 'success',
+    });
+  }
+  for (const d of declaredSuccesses) {
+    const t = parseReferenceInstant(d.completedAt ?? null);
+    selectionCandidates.push({
+      source: 'declared',
+      runId: d.runId ?? null,
+      attempt: isNumber(d.attempt) ? d.attempt : null,
+      completedAt: d.completedAt ?? null,
+      orderMs: t.valid ? t.ms : null,
+      verified: false,
+    });
+  }
+
+  let selectionVerdict = 'unknown';
+  let selected = null;
+  const superseded = [];
+  if (selectionCandidates.length === 0) {
+    selectionVerdict = 'unknown';
+  } else if (selectionCandidates.length === 1) {
+    selected = selectionCandidates[0];
+    selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
+  } else if (selectionCandidates.some((c) => c.orderMs === null)) {
+    // One of them cannot be placed on the timeline, so the newest one is not
+    // established.
+    selectionVerdict = 'ambiguous';
+  } else {
+    const sorted = [...selectionCandidates].sort((a, b) => b.orderMs - a.orderMs);
+    if (sorted[0].orderMs === sorted[1].orderMs) {
+      selectionVerdict = 'ambiguous';
+    } else if (sorted[0].source === 'this_run' && !sorted[0].verified) {
+      // A newer success that could not be verified must not silently
+      // supersede an earlier one.
+      selectionVerdict = 'ambiguous';
+    } else {
+      selected = sorted[0];
+      selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
+      superseded.push(...sorted.slice(1));
+    }
+  }
+  if (selectionVerdict === 'ambiguous') {
+    notes.push('the successful refreshes in this evidence could not be ordered, so the most recent one is not established');
+  }
+
+  const refreshSelection = {
+    verdict: selectionVerdict,
+    candidates: selectionCandidates.map((c) => ({
+      source: c.source,
+      runId: c.runId,
+      attempt: c.attempt,
+      completedAt: c.completedAt,
+      orderable: c.orderMs !== null,
+      verified: c.verified,
+    })),
+    selected: selected
+      ? { source: selected.source, runId: selected.runId, attempt: selected.attempt, completedAt: selected.completedAt }
+      : null,
+    superseded: superseded.map((c) => ({ source: c.source, runId: c.runId, completedAt: c.completedAt })),
+    note: 'the newest evidenced successful refresh wins; a newer success that cannot be verified does not supersede an earlier one',
+  };
+
+  const verification = {
+    stageOutcome,
+    verdict: refreshVerdict === 'success' ? 'verified' : (stageOutcome === 'all_succeeded' ? 'unverified' : 'not_applicable'),
+    // Provenance can only be complete for a run that actually got as far as
+    // needing provenance.
+    provenanceComplete: stageOutcome === 'all_succeeded' && provenanceProblems.length === 0,
+    problems: provenanceProblems,
+    note: 'a verified refresh requires every required stage to have succeeded AND validated retrieval evidence for every expected source AND a run bound to a revision and an attempt',
+  };
 
   const kind = data.kind || 'recorded';
 
@@ -494,23 +845,27 @@ function evaluateReceipt(caseData) {
     blockage,
     failingStage,
     publication,
-    lastSuccessfulRefresh: expectations.lastSuccessful
+    lastSuccessfulRefresh: selected
       ? {
-        runId: expectations.lastSuccessful.runId ?? null,
-        attempt: isNumber(expectations.lastSuccessful.attempt) ? expectations.lastSuccessful.attempt : null,
-        completedAt: expectations.lastSuccessful.completedAt ?? null,
-        verdict: 'reported',
-        note: 'declared in the receipt expectations as an EARLIER successful refresh; this run did not produce it and did not inherit anything from it',
+        runId: selected.runId,
+        attempt: selected.attempt,
+        completedAt: selected.completedAt,
+        verdict: selectionVerdict,
+        note: selected.source === 'this_run'
+          ? 'this run is the most recent successful refresh this evidence covers; earlier runs are not covered by it'
+          : 'declared in the receipt expectations as an EARLIER successful refresh; this run did not produce it and did not inherit anything from it',
       }
-      : (refreshVerdict === 'success'
-        ? {
-          runId: run.runId,
-          attempt: run.attempt,
-          completedAt: run.completedAt,
-          verdict: 'this_run',
-          note: 'this run is the most recent successful refresh this evidence covers; earlier runs are not covered by it',
-        }
-        : { runId: null, attempt: null, completedAt: null, verdict: 'unknown' }),
+      : {
+        runId: null,
+        attempt: null,
+        completedAt: null,
+        verdict: selectionVerdict === 'ambiguous' ? 'ambiguous' : 'unknown',
+        note: selectionVerdict === 'ambiguous'
+          ? 'the successful refreshes in this evidence could not be ordered, so the most recent one is not established'
+          : null,
+      },
+    refreshSelection,
+    verification,
     missingProof,
     notes,
     evidenceReferences: evidenceRefs,
@@ -549,8 +904,10 @@ function renderAssessment(receipt) {
     `  missing=${r.sourceSelection.missing.join(', ') || 'none'}` +
     `  coverage=${r.sourceSelection.coverage || 'unknown'}`);
   lines.push('');
-  lines.push(`VERDICT: ${r.refreshVerdict}` + (r.blockage ? ` (stopped ${r.blockage})` : ''));
+  lines.push(`VERDICT: ${r.refreshVerdict}` + (r.blockage ? ` (stopped ${r.blockage})` : '') +
+    (r.verification ? `  [${r.verification.verdict}; stages=${r.verification.stageOutcome}]` : ''));
   lines.push(`PUBLICATION: ${r.publication.verdict}` +
+    (r.publication.identity ? `  identity=${r.publication.identity}` : '') +
     (r.publication.reference ? `  reference=${r.publication.reference}` : '') +
     (r.publication.completedAt ? `  completedAt=${r.publication.completedAt}` : '') +
     (r.publication.note ? `  (${r.publication.note})` : ''));
@@ -578,10 +935,16 @@ function renderAssessment(receipt) {
       lines.push(`  ${String(v.source).padEnd(12)} ${String(v.view || '-').padEnd(22)}` +
         ` retrieved_at=${v.retrievedAt || 'unknown'}` +
         `  checksum=${v.checksum || 'unknown'}` +
-        `  age=${v.ageHours === null ? 'unknown' : v.ageHours + 'h'}`);
+        `  age=${v.ageHours === null ? 'unknown' : v.ageHours + 'h'}` +
+        `  timing=${v.timing || 'unknown'}` +
+        `  evidence=${v.valid === true ? 'validated' : 'INVALID: ' + (v.reasons || []).join('; ')}`);
     }
   }
-  lines.push(`  freshness verdict: ${r.freshness.verdict} (as of ${r.freshness.asOf || 'unknown'}, cadence ${r.freshness.cadenceHours}h)`);
+  lines.push(`  freshness verdict: ${r.freshness.verdict} (as of ${r.freshness.asOf || 'unknown'}, cadence ${r.freshness.cadenceHours === null ? 'unknown' : r.freshness.cadenceHours + 'h'})`);
+  for (const p of r.freshness.problems || []) lines.push(`    - ${p}`);
+  if (r.freshness.sourcePublication && r.freshness.sourcePublication.established === false) {
+    lines.push(`    - source publication: not established -- ${r.freshness.sourcePublication.note}`);
+  }
   lines.push('');
 
   lines.push('Counts');
@@ -593,8 +956,38 @@ function renderAssessment(receipt) {
     (r.rejectedRecords.reason ? `  (${r.rejectedRecords.reason})` : ''));
   lines.push(`  deployment: verdict=${r.deployment.verdict}` +
     `  reference=${r.deployment.reference || 'none'}` +
-    `  completedAt=${r.deployment.completedAt || 'unknown'}`);
+    `  completedAt=${r.deployment.completedAt || 'unknown'}` +
+    (r.deployment.identity ? `  identity=${r.deployment.identity.verdict}` : '') +
+    (r.deployment.identity && r.deployment.identity.reason ? `  (${r.deployment.identity.reason})` : ''));
   lines.push('');
+
+  if (r.refreshSelection) {
+    lines.push('Refresh selection');
+    lines.push(`  verdict=${r.refreshSelection.verdict}`);
+    for (const c of r.refreshSelection.candidates) {
+      lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${c.runId ?? 'unknown'}` +
+        `  attempt=${c.attempt === null ? 'unknown' : c.attempt}` +
+        `  completedAt=${c.completedAt || 'unknown'}` +
+        `  orderable=${c.orderable}` +
+        `  verified=${c.verified}`);
+    }
+    if (r.refreshSelection.superseded.length) {
+      for (const s of r.refreshSelection.superseded) {
+        lines.push(`  superseded: ${s.source} run=${s.runId ?? 'unknown'} completedAt=${s.completedAt || 'unknown'}`);
+      }
+    }
+    lines.push(`  ${r.refreshSelection.note}`);
+    lines.push('');
+  }
+
+  if (r.verification) {
+    lines.push('Verification');
+    lines.push(`  verdict=${r.verification.verdict}  stages=${r.verification.stageOutcome}` +
+      `  provenanceComplete=${r.verification.provenanceComplete}`);
+    for (const p of r.verification.problems) lines.push(`  - ${p}`);
+    lines.push(`  ${r.verification.note}`);
+    lines.push('');
+  }
 
   lines.push('Artifacts');
   if (r.artifacts.length === 0) {

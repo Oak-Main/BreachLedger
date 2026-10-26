@@ -1,7 +1,7 @@
 {
   "label": "Run 40085137740 (24 October 2026) -- historical comparison",
   "kind": "historical",
-  "note": "A REAL run, kept for comparison. It is NOT a current receipt and it says nothing about today's data. On 24 October 2026 it processed 7,964 valid HIPAA records with zero rejects and all of them unchanged, confirmed an empty Part 2 listing, exported 7,966 breaches and completed deployment at 10:16:24.744Z. The export count (7,966) covers the whole database and is larger than the 7,964 records this ingest handled; the two numbers are not required to agree. The run's revision was not recorded in the evidence supplied, so it is left unknown rather than guessed.",
+  "note": "A REAL run, kept for comparison. It is NOT a current receipt and it says nothing about today's data. On 24 October 2026 it processed 7,964 valid HIPAA records with zero rejects and all of them unchanged, confirmed an empty Part 2 listing, exported 7,966 breaches and completed deployment at 10:16:24.744Z. The export count (7,966) covers the whole database and is larger than the 7,964 records this ingest handled; the two numbers are not required to agree. The run's revision was not recorded in the evidence supplied, so it is left unknown rather than guessed, and the refresh therefore cannot be reported as a VERIFIED success: every stage succeeded, but the run is not bound to a revision. The recorded checksums are sanitized to the sha256 shape the ingester produces (each 32-character prefix repeated), so that the digest length matches production without disclosing the real digest.",
   "evidence": {
     "repository": "Oak-Main/BreachLedger",
     "workflowPath": ".github/workflows/ingest.yml",
@@ -60,19 +60,19 @@
         "source": "hhs_ocr",
         "view": "under_investigation",
         "retrieved_at": "2026-10-24T10:14:31.402Z",
-        "checksum": "b1946ac92492d2347c6235b4d2611184"
+        "checksum": "b1946ac92492d2347c6235b4d2611184b1946ac92492d2347c6235b4d2611184"
       },
       {
         "source": "hhs_ocr",
         "view": "archive",
         "retrieved_at": "2026-10-24T10:15:02.117Z",
-        "checksum": "0f3c8b1d6a2e94077c5b18e2af6d3901"
+        "checksum": "0f3c8b1d6a2e94077c5b18e2af6d39010f3c8b1d6a2e94077c5b18e2af6d3901"
       },
       {
         "source": "hhs_part2",
         "view": "under_investigation",
         "retrieved_at": "2026-10-24T10:15:19.884Z",
-        "checksum": "9a71e0c4b83d5f2610c7ad93be45128f"
+        "checksum": "9a71e0c4b83d5f2610c7ad93be45128f9a71e0c4b83d5f2610c7ad93be45128f"
       }
     ],
     "ingest": {

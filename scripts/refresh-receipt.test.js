@@ -31,9 +31,11 @@ function loadCase(file) {
 const FAILED_RUN = loadCase('failed-run-40185682174.json');
 const HISTORICAL_RUN = loadCase('historical-run-40085137740.json');
 const SYNTHETIC = loadCase('synthetic-cases.json');
+const PROVENANCE = loadCase('synthetic-provenance-cases.json');
+const ALL_SYNTHETIC = [...SYNTHETIC, ...PROVENANCE];
 
 function syntheticByPrefix(prefix) {
-  const found = SYNTHETIC.find((c) => c.label.startsWith(prefix));
+  const found = ALL_SYNTHETIC.find((c) => c.label.startsWith(prefix));
   assert.ok(found, `no synthetic case labelled "${prefix}"`);
   return found;
 }
@@ -156,8 +158,18 @@ test('the historical run is labelled as a comparison, never as a current receipt
 
 test('the historical run records what it actually did', () => {
   const receipt = evaluateReceipt(HISTORICAL_RUN);
-  assert.equal(receipt.refreshVerdict, 'success');
-  assert.equal(receipt.publication.verdict, 'published');
+  // Every required stage succeeded, and the retrieval evidence validates. But
+  // the run never recorded which revision it ran, so it cannot be reported as
+  // a VERIFIED refresh: the stage outcome is a fact, the verified claim is
+  // not.
+  assert.equal(receipt.verification.stageOutcome, 'all_succeeded');
+  assert.equal(receipt.verification.verdict, 'unverified');
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.ok(receipt.verification.problems.some((p) => /not bound to a single revision/.test(p)));
+  // The deployment reference is the site origin, which is live whether or not
+  // this run deployed anything. That is a REPORT, not identity proof.
+  assert.equal(receipt.publication.verdict, 'published_reported');
+  assert.equal(receipt.publication.identity, 'unproven');
   assert.equal(receipt.deployment.reference, 'https://breachbook.org');
   assert.equal(receipt.deployment.completedAt, '2026-10-24T10:16:24.744Z');
   assert.equal(receipt.ingest.parsed, 7964);
@@ -219,10 +231,13 @@ test('the last successful refresh is kept separate from the last attempt', () =>
   assert.equal(blind.lastSuccessfulRefresh.runId, null);
   assert.equal(blind.lastSuccessfulRefresh.completedAt, null);
 
-  // The historical run succeeded, so it is the most recent successful refresh
-  // this evidence covers.
+  // The historical run's stages all succeeded, so it is the most recent
+  // successful refresh this evidence covers -- even though it is NOT a
+  // verified refresh, because its revision was never recorded. Those are two
+  // separate questions and the receipt keeps them apart.
   const ok = evaluateReceipt(HISTORICAL_RUN);
-  assert.equal(ok.refreshVerdict, 'success');
+  assert.equal(ok.verification.stageOutcome, 'all_succeeded');
+  assert.equal(ok.refreshVerdict, 'unknown');
   assert.equal(ok.lastSuccessfulRefresh.verdict, 'this_run');
   assert.equal(ok.lastSuccessfulRefresh.runId, '40085137740');
 });
@@ -240,8 +255,8 @@ test('the readable assessment shows the last attempt and the last successful ref
 // --- The synthetic cases ---------------------------------------------------
 
 test('every synthetic case is labelled as a fixture, never as operational evidence', () => {
-  assert.ok(SYNTHETIC.length >= 10, `expected a full set of synthetic cases, found ${SYNTHETIC.length}`);
-  for (const c of SYNTHETIC) {
+  assert.ok(ALL_SYNTHETIC.length >= 10, `expected a full set of synthetic cases, found ${ALL_SYNTHETIC.length}`);
+  for (const c of ALL_SYNTHETIC) {
     assert.equal(c.kind, 'synthetic');
     assert.match(c.label, /^SYNTHETIC:/);
     const receipt = evaluateReceipt(c);
@@ -255,11 +270,17 @@ test('every synthetic case is labelled as a fixture, never as operational eviden
 test('SYNTHETIC: every required stage succeeds', () => {
   const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: every required stage succeeds'));
   assert.equal(receipt.refreshVerdict, 'success');
-  assert.equal(receipt.publication.verdict, 'published');
+  assert.equal(receipt.verification.verdict, 'verified');
+  assert.equal(receipt.verification.provenanceComplete, true);
+  // The deploy step succeeded and a reference was recorded, but nothing names
+  // the artifact that was published, so publication is REPORTED, not VERIFIED.
+  assert.equal(receipt.publication.verdict, 'published_reported');
+  assert.equal(receipt.publication.identity, 'unproven');
   assert.equal(receipt.mode, 'publication');
   assert.equal(receipt.freshness.verdict, 'within_cadence');
   assert.equal(receipt.tests.passed, 430);
   assert.equal(receipt.sourceSelection.missing.length, 0);
+  assert.deepEqual(receipt.sourceSelection.verified, ['hhs_ocr', 'hhs_part2']);
 });
 
 test('SYNTHETIC: failed tests with green cleanup steps', () => {
@@ -280,7 +301,8 @@ test('SYNTHETIC: ingestion skipped while every other stage is green', () => {
   assert.equal(stageOf(receipt, 'ingest').verdict, 'skipped');
   // The site WAS published -- with whatever was already in D1. Publication and
   // refresh are different claims.
-  assert.equal(receipt.publication.verdict, 'published');
+  assert.equal(receipt.publication.verdict, 'published_reported');
+  assert.equal(receipt.publication.identity, 'unproven');
 });
 
 test('SYNTHETIC: the ingestion step is absent from the evidence', () => {
@@ -312,7 +334,8 @@ test('SYNTHETIC: one required source has no retrieval evidence', () => {
   assert.equal(receipt.refreshVerdict, 'unknown');
   assert.deepEqual(receipt.sourceSelection.missing, ['hhs_part2']);
   assert.ok(receipt.missingProof.some((m) => /hhs_part2/.test(m)));
-  assert.equal(receipt.publication.verdict, 'published');
+  assert.equal(receipt.publication.verdict, 'published_reported');
+  assert.equal(receipt.publication.identity, 'unproven');
 });
 
 test('SYNTHETIC: the export step fails', () => {
@@ -473,6 +496,201 @@ test('a stale source is reported as exceeding the cadence, with no invented SLA'
   const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: every required stage succeeds'));
   assert.match(receipt.freshness.note, /no freshness SLA is defined/);
   assert.equal(receipt.freshness.cadenceHours, 24);
+});
+
+// --- Provenance must be complete before a success is claimed ---------------
+//
+// These are the regressions for the fail-closed rules. Each one takes a
+// synthetic run that would otherwise succeed, breaks exactly one piece of
+// its provenance, and asserts the receipt refuses to call it a success.
+
+test('a matching source name is not provenance on its own', () => {
+  const c = JSON.parse(JSON.stringify(syntheticByPrefix('SYNTHETIC: every required stage succeeds')));
+  c.evidence.retrievals[1].checksum = 'not-a-digest';
+  const receipt = evaluateReceipt(c);
+  // The name still matches. The evidence behind it does not validate.
+  assert.ok(receipt.sourceSelection.observed.includes('hhs_part2'));
+  assert.ok(receipt.sourceSelection.verified.includes('hhs_ocr'));
+  assert.ok(!receipt.sourceSelection.verified.includes('hhs_part2'));
+  assert.ok(receipt.sourceSelection.unverified.includes('hhs_part2'));
+  // So the success claim fails closed.
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.equal(receipt.verification.verdict, 'unverified');
+  assert.ok(receipt.missingProof.some((m) => /hhs_part2/.test(m)));
+  assert.ok(receipt.missingProof.some((m) => /sha256/.test(m)));
+});
+
+test('a retrieval bound to a different run is not evidence for this run', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a retrieval bound to a different run is not evidence for this run'));
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.ok(receipt.missingProof.some((m) => /different run/.test(m)));
+  assert.equal(receipt.sourceSelection.verified.length, 0);
+});
+
+test('a retrieval bound to a different revision is not evidence for this revision', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a retrieval bound to a different revision is not evidence for this revision'));
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.ok(receipt.missingProof.some((m) => /different revision/.test(m)));
+  assert.equal(receipt.sourceSelection.verified.length, 0);
+});
+
+test('a missing retrieval timestamp is not evidence', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a missing retrieval timestamp is not evidence'));
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.ok(receipt.missingProof.some((m) => /retrieved_at is missing/.test(m)));
+  assert.equal(receipt.freshness.verdict, 'unknown');
+});
+
+test('a malformed retrieval timestamp is not evidence', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a malformed retrieval timestamp is not evidence'));
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.ok(receipt.missingProof.some((m) => /canonical ISO-8601/.test(m)));
+});
+
+test('an impossible calendar date is not a real instant', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: an impossible calendar date is not a real instant'));
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.ok(receipt.missingProof.some((m) => /real calendar instant/.test(m)));
+  // Date.parse would have rolled 2026-02-30 over into March without noticing.
+  assert.equal(receipt.freshness.verdict, 'unknown');
+});
+
+test('a future retrieval timestamp is never within cadence', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a retrieval timestamp in the future is not a retrieval that happened'));
+  assert.notEqual(receipt.freshness.verdict, 'within_cadence');
+  assert.equal(receipt.freshness.verdict, 'unknown');
+  assert.equal(receipt.freshness.bySource[0].timing, 'future');
+  assert.equal(receipt.freshness.bySource[0].withinOneCadence, null);
+  // And a retrieval that cannot have happened is not evidence of a refresh.
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.ok(receipt.missingProof.some((m) => /later than the as-of instant/.test(m)));
+});
+
+test('invalid timing is unknown, never stale', () => {
+  // Stale is a claim about AGE. An unparseable timestamp is a claim about
+  // VALIDITY. Reporting the first when only the second is known would assert
+  // a fact the evidence does not support.
+  for (const label of [
+    'SYNTHETIC: a missing retrieval timestamp is not evidence',
+    'SYNTHETIC: a malformed retrieval timestamp is not evidence',
+    'SYNTHETIC: an impossible calendar date is not a real instant',
+    'SYNTHETIC: a retrieval timestamp in the future is not a retrieval that happened',
+  ]) {
+    const receipt = evaluateReceipt(syntheticByPrefix(label));
+    assert.equal(receipt.freshness.verdict, 'unknown', label);
+    assert.notEqual(receipt.freshness.verdict, 'exceeds_cadence', label);
+  }
+});
+
+test('an invalid as-of instant leaves freshness unknown', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: an impossible as-of instant leaves freshness unknown'));
+  assert.equal(receipt.freshness.verdict, 'unknown');
+  assert.ok(receipt.freshness.problems.some((p) => /as-of instant/.test(p)));
+  // The refresh itself is unaffected: only the age cannot be computed.
+  assert.equal(receipt.refreshVerdict, 'success');
+});
+
+test('a non-positive cadence leaves freshness unknown', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a non-positive cadence leaves freshness unknown'));
+  assert.equal(receipt.freshness.verdict, 'unknown');
+  assert.equal(receipt.freshness.cadenceHours, null);
+  assert.ok(receipt.freshness.problems.some((p) => /positive cadence/.test(p)));
+  for (const row of receipt.freshness.bySource) {
+    assert.equal(row.withinOneCadence, null);
+  }
+});
+
+test('a recent retrieval does not establish a recent source publication', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: every required stage succeeds'));
+  assert.equal(receipt.freshness.verdict, 'within_cadence');
+  assert.equal(receipt.freshness.sourcePublication.established, false);
+  assert.match(receipt.freshness.sourcePublication.note, /not the publisher's publication time/);
+  assert.match(renderAssessment(receipt), /source publication: not established/);
+});
+
+test('a generic site URL is not identity proof', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: the deploy step succeeded but nothing identifies the published artifact'));
+  // The deploy step succeeded and a reference was recorded -- so a
+  // publication is REPORTED.
+  assert.equal(receipt.publication.verdict, 'published_reported');
+  // But the reference is the site origin, which is live whether or not this
+  // run deployed anything, so the identity is not proven.
+  assert.equal(receipt.publication.identity, 'unproven');
+  assert.equal(receipt.deployment.identity.referenceIsSiteOrigin, true);
+  assert.match(receipt.deployment.identity.reason, /names no deployed artifact/);
+  assert.match(receipt.deployment.identity.reason, /site origin/);
+});
+
+test('the deployed artifact is identified when the evidence names it and binds it', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: the deployment names the artifact and binds it to this revision'));
+  assert.equal(receipt.publication.verdict, 'published_verified');
+  assert.equal(receipt.publication.identity, 'verified');
+  assert.equal(receipt.deployment.identity.artifactSha.length, 64);
+  assert.equal(receipt.deployment.identity.boundSha, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef');
+});
+
+test('a deployment bound to another revision is not identity proof', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: the deployment names an artifact built from a different revision'));
+  assert.equal(receipt.publication.verdict, 'published_reported');
+  assert.equal(receipt.publication.identity, 'unproven');
+  assert.match(receipt.deployment.identity.reason, /different revision/);
+});
+
+test('a newer verified success supersedes the declared earlier success', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a newer verified success supersedes the declared earlier success'));
+  assert.equal(receipt.refreshVerdict, 'success');
+  assert.equal(receipt.verification.verdict, 'verified');
+  assert.equal(receipt.refreshSelection.verdict, 'this_run');
+  assert.equal(receipt.refreshSelection.selected.runId, receipt.run.runId);
+  assert.equal(receipt.lastSuccessfulRefresh.verdict, 'this_run');
+  assert.equal(receipt.lastSuccessfulRefresh.runId, receipt.run.runId);
+  // The earlier declared success is recorded as superseded, not deleted.
+  const sup = receipt.refreshSelection.superseded.find((s) => s.runId === '40085137740');
+  assert.ok(sup, 'the declared earlier success should be recorded as superseded');
+  assert.equal(sup.completedAt, '2026-10-24T10:16:24.744Z');
+});
+
+test('the successful refreshes are not ordered when the current run has no completion time', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: the successful refreshes cannot be ordered, so the newest one is not established'));
+  assert.equal(receipt.refreshSelection.verdict, 'ambiguous');
+  assert.equal(receipt.refreshSelection.selected, null);
+  assert.equal(receipt.lastSuccessfulRefresh.verdict, 'ambiguous');
+  assert.equal(receipt.lastSuccessfulRefresh.runId, null);
+  // The uncertainty is stated, not hidden.
+  assert.ok(receipt.notes.some((n) => /could not be ordered/.test(n)));
+});
+
+test('a failed attempt keeps the earlier success without inheriting its state', () => {
+  const c = JSON.parse(JSON.stringify(syntheticByPrefix('SYNTHETIC: failed tests with green cleanup steps')));
+  c.expectations.lastSuccessful = {
+    runId: '40085137740',
+    attempt: null,
+    completedAt: '2026-10-24T10:16:24.744Z',
+  };
+  const receipt = evaluateReceipt(c);
+  // The earlier success is retained...
+  assert.equal(receipt.lastSuccessfulRefresh.verdict, 'reported');
+  assert.equal(receipt.lastSuccessfulRefresh.runId, '40085137740');
+  // ...but this run keeps its own outcome and borrows nothing from it.
+  assert.equal(receipt.refreshVerdict, 'failed');
+  assert.equal(receipt.publication.verdict, 'not_published');
+  // This run failed before ingestion, so it wrote nothing and retrieved
+  // nothing of its own. The earlier success's counts and retrievals are not
+  // imported to fill the gap.
+  assert.equal(receipt.ingest.written, null);
+  assert.equal(receipt.export.breaches, null);
+  assert.equal(receipt.build.pages, null);
+  assert.equal(receipt.retrievals.length, 0);
+});
+
+test('a run with no recorded revision is not a verified success', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a run with no recorded revision is not a verified success'));
+  // Every stage succeeded, and that fact is preserved...
+  assert.equal(receipt.verification.stageOutcome, 'all_succeeded');
+  // ...but the refresh itself cannot be verified.
+  assert.equal(receipt.refreshVerdict, 'unknown');
+  assert.equal(receipt.verification.verdict, 'unverified');
+  assert.ok(receipt.verification.problems.some((p) => /not bound to a single revision/.test(p)));
 });
 
 // --- The checker itself must stay offline and inert on import -------------

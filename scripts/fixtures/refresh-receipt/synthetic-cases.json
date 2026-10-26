@@ -37,8 +37,8 @@
         { "name": "ingest-rejects", "runId": "90000000001", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964, "unchanged": 7964 },
       "export": { "breaches": 7966 },
@@ -142,8 +142,8 @@
         { "name": "ingest-rejects", "runId": "90000000003", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
@@ -194,7 +194,7 @@
       ],
       "artifacts": [],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" }
       ],
       "ingest": null,
       "export": { "breaches": 7966 },
@@ -248,8 +248,8 @@
         { "name": "ingest-rejects", "runId": "90000000005", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T09:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T09:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T09:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T09:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 0 },
       "export": null,
@@ -303,7 +303,7 @@
         { "name": "ingest-rejects", "runId": "90000000006", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
@@ -357,8 +357,8 @@
         { "name": "ingest-rejects", "runId": "90000000007", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": null,
@@ -412,8 +412,8 @@
         { "name": "ingest-rejects", "runId": "90000000008", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
@@ -467,8 +467,8 @@
         { "name": "ingest-rejects", "runId": "90000000009", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
@@ -522,8 +522,8 @@
         { "name": "ingest-rejects", "runId": "90000000010", "attempt": 1, "sha": "cafebabecafebabecafebabecafebabecafebabe", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
@@ -577,8 +577,8 @@
         { "name": "ingest-rejects", "runId": "90000000011", "attempt": 2, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
@@ -632,8 +632,8 @@
         { "name": "ingest-rejects", "runId": "90000000012", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
@@ -687,8 +687,8 @@
         { "name": "ingest-rejects", "runId": "88888888888", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
       ],
       "retrievals": [
-        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaa1" },
-        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbb2" }
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
       ],
       "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
       "export": { "breaches": 7966 },
