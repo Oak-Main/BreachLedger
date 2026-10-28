@@ -220,13 +220,16 @@ function parseReferenceInstant(value) {
  *
  * A source NAME is not provenance. A row only counts as evidence when it
  * carries a timestamp this repository could have produced, a checksum of the
- * shape the ingester produces, and no binding that contradicts the run the
- * receipt is about.
+ * shape the ingester produces, no timestamp later than a known observation
+ * instant, and no binding that contradicts the run the receipt is about.
  */
-function validateRetrievalRow(row, run) {
+function validateRetrievalRow(row, run, asOfMs) {
   const reasons = [];
   const instant = parseCanonicalInstant(row.retrieved_at);
   if (!instant.valid) reasons.push(`retrieved_at ${instant.reason}`);
+  if (instant.valid && asOfMs !== null && instant.ms > asOfMs) {
+    reasons.push('retrieved_at is later than the as-of instant');
+  }
 
   const checksum = typeof row.checksum === 'string' ? row.checksum : null;
   if (checksum === null) {
@@ -358,6 +361,13 @@ function evaluateReceipt(caseData) {
   };
   if (tests.total !== null) ref('evidence.tests', rawTests);
 
+  // The same observation instant governs provenance, source coverage and
+  // freshness. Validate it before any retrieval can count as evidence.
+  const asOf = expectations.asOf ?? null;
+  const asOfParsed = parseReferenceInstant(asOf);
+  const asOfMs = asOfParsed.valid ? asOfParsed.ms : null;
+  const observationKnown = asOfMs !== null;
+
   // --- Source selection ---------------------------------------------------
   const expectedSources = Array.isArray(expectations.expectedSources) ? expectations.expectedSources : [];
   const retrievals = Array.isArray(evidence.retrievals) ? evidence.retrievals : [];
@@ -369,7 +379,7 @@ function evaluateReceipt(caseData) {
   // timestamp this repository could have produced, a checksum of the shape the
   // ingester produces, and no binding that contradicts this run.
   const retrievalRows = retrievals.map((r) => {
-    const v = validateRetrievalRow(r, run);
+    const v = validateRetrievalRow(r, run, asOfMs);
     return {
       source: r.source ?? null,
       view: r.view ?? null,
@@ -398,12 +408,6 @@ function evaluateReceipt(caseData) {
   };
 
   // --- Freshness ----------------------------------------------------------
-  const asOf = expectations.asOf ?? null;
-  const asOfParsed = parseReferenceInstant(asOf);
-  const asOfMs = asOfParsed.valid ? asOfParsed.ms : null;
-  // Whether the receipt has a usable observation time at all. Every
-  // time-based comparison below is gated on this.
-  const observationKnown = asOfMs !== null;
   // An absent or non-positive cadence is not a freshness SLA. Defaulting one
   // in would invent a threshold the repository does not define, so the verdict
   // stays unknown instead.
@@ -694,14 +698,11 @@ function evaluateReceipt(caseData) {
             invalidEvidence.map((r) => `${r.source ?? 'unknown source'} (${r.reasons.join('; ')})`).join(' | '),
           );
         }
-        // A retrieval stamped in the future is internally contradictory
-        // evidence: it describes a fetch that cannot have happened yet.
-        const futureRows = freshnessRows.filter((r) => r.timing === 'future');
-        if (futureRows.length) {
-          provenanceProblems.push(
-            `${futureRows.length} retrieval timestamp(s) are later than the as-of instant (${asOf}): ` +
-            futureRows.map((r) => `${r.source ?? 'unknown source'} at ${r.retrievedAt}`).join(' | '),
-          );
+        // A run that had not completed at the observation instant cannot
+        // supply a verified success, even when every recorded stage is green.
+        const completion = parseReferenceInstant(run.completedAt);
+        if (observationKnown && completion.valid && completion.ms > asOfMs) {
+          provenanceProblems.push(`the run completed after the as-of instant (${asOf})`);
         }
         if (artifacts.some((a) => a.verdict === 'rejected')) {
           provenanceProblems.push('an artifact binding cannot be validated against this run, attempt or revision');

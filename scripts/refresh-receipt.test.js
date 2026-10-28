@@ -1206,6 +1206,120 @@ test('a legitimate declared prior retains reported semantics when the current ru
   assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run').excluded, true);
 });
 
+// --- Observation-time provenance stays consistent across receipt fields ---
+
+test('a future-completed run is unverified as well as excluded from selection', () => {
+  for (const completedAt of ['2026-10-25T07:00:00.001Z', '2026-10-26T07:00:00Z']) {
+    for (const priorAttempt of [undefined, null, 1]) {
+      const c = greenCase();
+      c.evidence.completedAt = completedAt;
+      c.expectations.lastSuccessful = { runId: 'prior', attempt: priorAttempt, completedAt: '2026-10-24T06:00:00Z' };
+      const r = evaluateReceipt(c);
+      assert.equal(r.verification.stageOutcome, 'all_succeeded');
+      assert.equal(r.refreshVerdict, 'unknown');
+      assert.equal(r.verification.verdict, 'unverified');
+      assert.equal(r.verification.provenanceComplete, false);
+      assert.ok(r.verification.problems.some((p) => /run completed after the as-of instant/.test(p)));
+      const current = r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run');
+      assert.equal(current.completedAt, completedAt);
+      assert.equal(current.futureDated, true);
+      assert.equal(current.excluded, true);
+      assert.equal(current.verified, false);
+      assert.equal(r.lastSuccessfulRefresh.verdict, 'reported');
+      assert.equal(r.lastSuccessfulRefresh.runId, 'prior');
+      assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').verified, false);
+      assert.match(renderAssessment(r), /verdict=unknown/);
+    }
+  }
+});
+
+test('a future-completed singleton retains evidence without a verified success claim', () => {
+  const c = greenCase();
+  c.evidence.completedAt = '2026-10-25T08:00:00Z';
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshVerdict, 'unknown');
+  assert.equal(r.verification.provenanceComplete, false);
+  assert.equal(r.refreshSelection.verdict, 'unknown');
+  assert.equal(r.refreshSelection.selected, null);
+  assert.equal(r.refreshSelection.candidates[0].verified, false);
+  assert.equal(r.refreshSelection.candidates[0].excluded, true);
+  assert.ok(r.missingProof.some((p) => /run completed after the as-of instant/.test(p)));
+});
+
+test('run completion at or before the observation time retains verified success', () => {
+  for (const completedAt of ['2026-10-25T06:59:59.999Z', '2026-10-25T07:00:00.000Z']) {
+    const c = greenCase();
+    c.evidence.completedAt = completedAt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.verification.provenanceComplete, true);
+    assert.deepEqual(r.verification.problems, []);
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    assert.equal(r.refreshSelection.candidates[0].verified, true);
+    assert.equal(r.refreshSelection.candidates[0].excluded, false);
+  }
+});
+
+test('a future retrieval cannot count as validated source coverage', () => {
+  for (const retrievedAt of ['2026-10-25T07:00:00.001Z', '2026-10-25T09:00:00.000Z']) {
+    const c = greenCase();
+    c.evidence.retrievals[0].retrieved_at = retrievedAt;
+    const r = evaluateReceipt(c);
+    const row = r.retrievals[0];
+    assert.equal(row.retrievedAt, retrievedAt);
+    assert.equal(row.valid, false);
+    assert.equal(row.timing, 'future');
+    assert.ok(row.reasons.some((p) => /later than the as-of instant/.test(p)));
+    assert.equal(row.ageMs, null);
+    assert.equal(row.withinOneCadence, null);
+    assert.deepEqual(r.sourceSelection.observed, ['hhs_ocr', 'hhs_part2']);
+    assert.deepEqual(r.sourceSelection.verified, ['hhs_part2']);
+    assert.deepEqual(r.sourceSelection.missing, ['hhs_ocr']);
+    assert.deepEqual(r.sourceSelection.unverified, ['hhs_ocr']);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.freshness.verdict, 'unknown');
+    assert.match(renderAssessment(r), /hhs_ocr[^\n]*timing=future[^\n]*evidence=INVALID/);
+  }
+});
+
+test('retrievals at or before the observation time remain valid coverage', () => {
+  for (const retrievedAt of ['2026-10-25T06:59:59.999Z', '2026-10-25T07:00:00.000Z']) {
+    const c = greenCase();
+    c.evidence.completedAt = c.expectations.asOf;
+    for (const row of c.evidence.retrievals) row.retrieved_at = retrievedAt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.freshness.verdict, 'within_cadence');
+    assert.deepEqual(r.sourceSelection.verified, ['hhs_ocr', 'hhs_part2']);
+    assert.deepEqual(r.sourceSelection.missing, []);
+    assert.ok(r.retrievals.every((row) => row.valid && row.timing === 'valid' && row.ageMs >= 0));
+  }
+});
+
+test('a valid duplicate covers a source without validating its future row', () => {
+  const c = greenCase();
+  c.evidence.retrievals.push({ ...c.evidence.retrievals[0], retrieved_at: '2026-10-25T07:00:00.001Z' });
+  const r = evaluateReceipt(c);
+  assert.equal(r.retrievals[0].valid, true);
+  assert.equal(r.retrievals[2].valid, false);
+  assert.deepEqual(r.sourceSelection.verified, ['hhs_ocr', 'hhs_part2']);
+  assert.equal(r.refreshVerdict, 'unknown');
+  assert.equal(r.freshness.verdict, 'unknown');
+  assert.equal(r.verification.provenanceComplete, false);
+});
+
+test('future retrieval validation preserves a failed stage verdict', () => {
+  const c = greenCase();
+  c.evidence.retrievals[0].retrieved_at = '2026-10-25T07:00:00.001Z';
+  c.evidence.jobs[0].steps.find((step) => step.name === 'Run npm test').conclusion = 'failure';
+  const r = evaluateReceipt(c);
+  assert.equal(r.retrievals[0].valid, false);
+  assert.deepEqual(r.sourceSelection.verified, ['hhs_part2']);
+  assert.equal(r.refreshVerdict, 'failed');
+  assert.equal(r.failingStage, 'tests');
+  assert.equal(r.verification.verdict, 'not_applicable');
+});
+
 // --- The checker itself must stay offline and inert on import -------------
 
 test('importing the checker does not execute it', () => {
