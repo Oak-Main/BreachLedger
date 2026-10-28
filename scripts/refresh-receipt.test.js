@@ -1481,6 +1481,125 @@ test('malformed completion display preserves raw evidence without coercing objec
   assert.match(renderAssessment(r), /completedAt=invalid/);
 });
 
+// --- Run identifiers are evidence, never objects to coerce into text -------
+
+const MALFORMED_RUN_IDS = ['', '   ', 0, -1, 1.5, NaN, Infinity, false, true, [], {}, { toString: null }, Object.create(null), [{ toString: null }]];
+
+test('malformed current run identifiers render invalid and remain unverified', () => {
+  for (let i = 0; i < MALFORMED_RUN_IDS.length; i++) {
+    const id = MALFORMED_RUN_IDS[i];
+    const c = greenCase();
+    c.evidence.runId = id;
+    c.evidence.artifacts = [];
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', `case ${i}`);
+    assert.equal(r.verification.verdict, 'unverified');
+    assert.ok(Object.is(r.run.runId, id));
+    assert.equal(r.refreshSelection.candidates[0].verified, false);
+    const text = renderAssessment(r);
+    assert.match(text, /Run:\s+invalid \(attempt 1\)/);
+    assert.match(text, /candidate:[^\n]*run=invalid/);
+    assert.match(text, /Last attempt: run invalid/);
+    assert.ok(!text.includes('[object Object]'));
+  }
+});
+
+test('absent run identifiers render unknown without inventing identity', () => {
+  for (const id of [undefined, null]) {
+    const c = greenCase();
+    c.evidence.runId = id;
+    c.evidence.artifacts = [];
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.run.runId, null);
+    const text = renderAssessment(r);
+    assert.match(text, /Run:\s+unknown \(attempt 1\)/);
+    assert.match(text, /Last attempt: run unknown/);
+  }
+});
+
+test('valid string and numeric run identifiers keep their values and success semantics', () => {
+  for (const id of ['90000000001', 'named-run', 1, 40764561522]) {
+    const c = greenCase();
+    c.evidence.runId = id;
+    c.evidence.artifacts[0].runId = id;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.lastSuccessfulRefresh.runId, id);
+    const text = renderAssessment(r);
+    assert.ok(text.includes(`Run:         ${id} (attempt 1)`));
+    assert.ok(text.includes(`Last attempt: run ${id} (attempt 1)`));
+    assert.ok(text.includes(`Last successful refresh: run ${id} (attempt 1)`));
+  }
+});
+
+test('display formatting does not coerce numeric and string run bindings into a match', () => {
+  for (const [currentId, otherId] of [[123, '123'], ['123', 123]]) {
+    const c = greenCase();
+    c.evidence.runId = currentId;
+    for (const row of c.evidence.retrievals) row.runId = otherId;
+    c.evidence.artifacts[0].runId = otherId;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.run.runId, currentId);
+    assert.deepEqual(r.sourceSelection.verified, []);
+    assert.ok(r.retrievals.every((row) => !row.valid && row.reasons.some((reason) => /different run/.test(reason))));
+    assert.equal(r.artifacts[0].runId, otherId);
+    assert.equal(r.artifacts[0].verdict, 'rejected');
+    assert.doesNotThrow(() => renderAssessment(r));
+  }
+});
+
+test('future candidate notes never coerce malformed current or declared run identifiers', () => {
+  for (const id of MALFORMED_RUN_IDS) {
+    for (const source of ['current', 'declared']) {
+      const c = greenCase();
+      if (source === 'current') {
+        c.evidence.runId = id;
+        c.evidence.artifacts = [];
+        c.evidence.completedAt = '2026-10-26T00:00:00Z';
+      } else {
+        c.expectations.lastSuccessful = { runId: id, completedAt: '2026-10-26T00:00:00Z' };
+      }
+      const r = evaluateReceipt(c);
+      const future = r.refreshSelection.candidates.find((candidate) => candidate.futureDated === true);
+      assert.ok(Object.is(future.runId, id));
+      assert.equal(future.excluded, true);
+      assert.equal(future.verified, false);
+      assert.ok(r.notes.some((note) => /run invalid at/.test(note)));
+      assert.doesNotThrow(() => renderAssessment(r));
+      assert.equal(r.refreshVerdict, source === 'current' ? 'unknown' : 'success');
+    }
+  }
+});
+
+test('a declared prior with malformed identity stays reported without unsafe rendering', () => {
+  for (const id of MALFORMED_RUN_IDS) {
+    const c = greenCase();
+    c.evidence.jobs[0].steps.find((step) => step.name === 'Run npm test').conclusion = 'failure';
+    c.expectations.lastSuccessful = { runId: id, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'failed');
+    assert.equal(r.lastSuccessfulRefresh.verdict, 'reported');
+    assert.ok(Object.is(r.lastSuccessfulRefresh.runId, id));
+    assert.equal(r.refreshSelection.candidates[0].verified, false);
+    assert.match(renderAssessment(r), /Last successful refresh: run invalid/);
+  }
+});
+
+test('superseded declared identifiers remain raw evidence and render safely', () => {
+  for (const id of MALFORMED_RUN_IDS) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: id, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    assert.ok(Object.is(r.refreshSelection.superseded[0].runId, id));
+    assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').verified, false);
+    assert.match(renderAssessment(r), /superseded: declared run=invalid/);
+  }
+});
+
 // --- The checker itself must stay offline and inert on import -------------
 
 test('importing the checker does not execute it', () => {

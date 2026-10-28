@@ -152,6 +152,11 @@ function hasRunIdentity(value) {
     (isNumber(value) && Number.isInteger(value) && value > 0);
 }
 
+function formatRunIdentity(value) {
+  if (value == null) return 'unknown';
+  return hasRunIdentity(value) ? String(value) : 'invalid';
+}
+
 function parseInstant(value) {
   if (typeof value !== 'string') return null;
   const t = Date.parse(value);
@@ -920,7 +925,7 @@ function evaluateReceipt(caseData) {
     notes.push(
       `${futureCandidates.length} successful-refresh candidate(s) completed after the receipt observation time` +
       `${observationKnown ? ` (${asOf})` : ''} and cannot be an already evidenced success` +
-      `: ${futureCandidates.map((c) => `${c.source} run ${c.runId ?? 'unknown'} at ${c.completedAt ?? 'unknown'}`).join(' | ')}`,
+      `: ${futureCandidates.map((c) => `${c.source} run ${formatRunIdentity(c.runId)} at ${c.completedAt ?? 'unknown'}`).join(' | ')}`,
     );
   }
   if (invalidAttemptCandidates.length) {
@@ -1042,7 +1047,7 @@ function renderAssessment(receipt) {
   }
   lines.push(`Repository:  ${r.run.repository || 'unknown'}`);
   lines.push(`Workflow:    ${r.run.workflowPath || 'unknown'}`);
-  lines.push(`Run:         ${r.run.runId || 'unknown'} (attempt ${formatAttempt(r.run.attempt)})` +
+  lines.push(`Run:         ${formatRunIdentity(r.run.runId)} (attempt ${formatAttempt(r.run.attempt)})` +
     `  event=${r.run.event || 'unknown'}  branch=${r.run.branch || 'unknown'}`);
   lines.push(`Revision:    head=${r.run.headSha || 'unknown'}`);
   lines.push(`             checked out=${r.run.checkedOutSha || 'unknown'}` +
@@ -1119,7 +1124,7 @@ function renderAssessment(receipt) {
       `  observation=${formatTimestamp(r.refreshSelection.observationTime)}` +
       `  observationKnown=${r.refreshSelection.observationKnown}`);
     for (const c of r.refreshSelection.candidates) {
-      lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${c.runId ?? 'unknown'}` +
+      lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${formatRunIdentity(c.runId)}` +
         `  attempt=${formatAttempt(c.attempt)}` +
         `  completedAt=${formatTimestamp(c.completedAt)}` +
         `  orderable=${c.orderable}` +
@@ -1129,7 +1134,7 @@ function renderAssessment(receipt) {
     }
     if (r.refreshSelection.superseded.length) {
       for (const s of r.refreshSelection.superseded) {
-        lines.push(`  superseded: ${s.source} run=${s.runId ?? 'unknown'} completedAt=${formatTimestamp(s.completedAt)}`);
+        lines.push(`  superseded: ${s.source} run=${formatRunIdentity(s.runId)} completedAt=${formatTimestamp(s.completedAt)}`);
       }
     }
     lines.push(`  ${r.refreshSelection.note}`);
@@ -1167,10 +1172,10 @@ function renderAssessment(receipt) {
     for (const n of r.notes) lines.push(`  - ${n}`);
   }
   lines.push('');
-  lines.push(`Last attempt: run ${r.run.runId} (attempt ${formatAttempt(r.run.attempt)})` +
+  lines.push(`Last attempt: run ${formatRunIdentity(r.run.runId)} (attempt ${formatAttempt(r.run.attempt)})` +
     `  verdict=${r.refreshVerdict}  publication=${r.publication.verdict}` +
     `  startedAt=${formatTimestamp(r.run.startedAt)}`);
-  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${r.lastSuccessfulRefresh.runId} (attempt ${formatAttempt(r.lastSuccessfulRefresh.attempt)})`}` +
+  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${formatRunIdentity(r.lastSuccessfulRefresh.runId)} (attempt ${formatAttempt(r.lastSuccessfulRefresh.attempt)})`}` +
     (r.lastSuccessfulRefresh.completedAt ? `  completedAt=${formatTimestamp(r.lastSuccessfulRefresh.completedAt)}` : '') +
     (r.lastSuccessfulRefresh.note ? `  -- ${r.lastSuccessfulRefresh.note}` : ''));
   lines.push('This receipt evaluates LOCAL SAVED EVIDENCE ONLY. It is not a live observation of any provider,');
