@@ -142,6 +142,11 @@ function formatAttempt(value) {
   return isAttempt(value) ? String(value) : 'invalid';
 }
 
+function formatTimestamp(value) {
+  if (value == null || value === '') return 'unknown';
+  return typeof value === 'string' ? value : 'invalid';
+}
+
 function hasRunIdentity(value) {
   return (typeof value === 'string' && value.trim() !== '') ||
     (isNumber(value) && Number.isInteger(value) && value > 0);
@@ -221,14 +226,27 @@ function parseReferenceInstant(value) {
  * A source NAME is not provenance. A row only counts as evidence when it
  * carries a timestamp this repository could have produced, a checksum of the
  * shape the ingester produces, no timestamp later than a known observation
- * instant, and no binding that contradicts the run the receipt is about.
+ * instant or outside known run bounds, and no binding that contradicts the
+ * run the receipt is about. An unknown start does not invent a lower bound.
  */
-function validateRetrievalRow(row, run, asOfMs) {
+function validateRetrievalRow(row, run, { asOfMs, startedAtMs, completedAtMs }) {
   const reasons = [];
   const instant = parseCanonicalInstant(row.retrieved_at);
+  let timing = instant.valid ? 'valid' : (row.retrieved_at == null ? 'missing' : 'invalid');
   if (!instant.valid) reasons.push(`retrieved_at ${instant.reason}`);
   if (instant.valid && asOfMs !== null && instant.ms > asOfMs) {
     reasons.push('retrieved_at is later than the as-of instant');
+    timing = 'future';
+  }
+  // Only recorded, parseable run bounds constrain the claimed retrieval.
+  // Unknown bounds are not replaced with guessed start or completion times.
+  if (instant.valid && startedAtMs !== null && instant.ms < startedAtMs) {
+    reasons.push('retrieved_at is before the recorded run start');
+    if (timing === 'valid') timing = 'invalid';
+  }
+  if (instant.valid && completedAtMs !== null && instant.ms > completedAtMs) {
+    reasons.push('retrieved_at is after the recorded run completion');
+    if (timing === 'valid') timing = 'invalid';
   }
 
   const checksum = typeof row.checksum === 'string' ? row.checksum : null;
@@ -253,7 +271,7 @@ function validateRetrievalRow(row, run, asOfMs) {
     else if (row.sha !== run.headSha) reasons.push('the retrieval was produced from a different revision');
   }
 
-  return { instant, checksum, reasons, valid: reasons.length === 0 };
+  return { instant, checksum, timing, reasons, valid: reasons.length === 0 };
 }
 
 /**
@@ -367,6 +385,13 @@ function evaluateReceipt(caseData) {
   const asOfParsed = parseReferenceInstant(asOf);
   const asOfMs = asOfParsed.valid ? asOfParsed.ms : null;
   const observationKnown = asOfMs !== null;
+  const runStart = parseReferenceInstant(run.startedAt);
+  const runCompletion = parseReferenceInstant(run.completedAt);
+  const timeBounds = {
+    asOfMs,
+    startedAtMs: runStart.valid ? runStart.ms : null,
+    completedAtMs: runCompletion.valid ? runCompletion.ms : null,
+  };
 
   // --- Source selection ---------------------------------------------------
   const expectedSources = Array.isArray(expectations.expectedSources) ? expectations.expectedSources : [];
@@ -379,13 +404,14 @@ function evaluateReceipt(caseData) {
   // timestamp this repository could have produced, a checksum of the shape the
   // ingester produces, and no binding that contradicts this run.
   const retrievalRows = retrievals.map((r) => {
-    const v = validateRetrievalRow(r, run, asOfMs);
+    const v = validateRetrievalRow(r, run, timeBounds);
     return {
       source: r.source ?? null,
       view: r.view ?? null,
       retrievedAt: r.retrieved_at ?? null,
       checksum: r.checksum ?? null,
       instant: v.instant,
+      timing: v.timing,
       valid: v.valid,
       reasons: v.reasons,
     };
@@ -416,12 +442,7 @@ function evaluateReceipt(caseData) {
   const cadenceHours = cadenceValid ? cadenceSupplied : null;
 
   const freshnessRows = retrievalRows.map((r) => {
-    let timing = 'invalid';
-    if (r.instant.valid) timing = 'valid';
-    else if (r.retrievedAt === null || r.retrievedAt === undefined) timing = 'missing';
-    // A retrieval stamped in the future has not happened yet. It is not
-    // "fresh" -- it is invalid evidence.
-    if (timing === 'valid' && observationKnown && r.instant.ms > asOfMs) timing = 'future';
+    const timing = r.timing;
     // The age is only ever computed against a KNOWN observation time. An
     // invalid or missing asOf must not take part in the subtraction: `null -
     // instant` is a negative number, and a negative age compares as "within
@@ -698,10 +719,16 @@ function evaluateReceipt(caseData) {
             invalidEvidence.map((r) => `${r.source ?? 'unknown source'} (${r.reasons.join('; ')})`).join(' | '),
           );
         }
-        // A run that had not completed at the observation instant cannot
-        // supply a verified success, even when every recorded stage is green.
-        const completion = parseReferenceInstant(run.completedAt);
-        if (observationKnown && completion.valid && completion.ms > asOfMs) {
+        // A current success needs a usable recorded completion independently
+        // of freshness. A known contradictory run interval or future
+        // completion cannot verify success, even when every stage is green.
+        if (!runCompletion.valid) {
+          provenanceProblems.push(`the run completion instant ${runCompletion.reason}`);
+        }
+        if (runCompletion.valid && runStart.valid && runCompletion.ms < runStart.ms) {
+          provenanceProblems.push('the run completed before its recorded start');
+        }
+        if (observationKnown && runCompletion.valid && runCompletion.ms > asOfMs) {
           provenanceProblems.push(`the run completed after the as-of instant (${asOf})`);
         }
         if (artifacts.some((a) => a.verdict === 'rejected')) {
@@ -1022,7 +1049,7 @@ function renderAssessment(receipt) {
     `  matches expected: ${r.revision.revisionMatches === null ? 'unknown' : r.revision.revisionMatches}` +
     `  checkout matches: ${r.revision.checkoutMatches === null ? 'unknown' : r.revision.checkoutMatches}` +
     `  attempt matches: ${r.revision.attemptMatches === null ? 'unknown' : r.revision.attemptMatches}`);
-  lines.push(`Started:     ${r.run.startedAt || 'unknown'}   Completed: ${r.run.completedAt || 'unknown'}`);
+  lines.push(`Started:     ${formatTimestamp(r.run.startedAt)}   Completed: ${formatTimestamp(r.run.completedAt)}`);
   lines.push(`Mode:        ${r.mode}`);
   lines.push(`Sources:     expected=${r.sourceSelection.expected.join(', ') || 'none'}` +
     `  observed=${r.sourceSelection.observed.join(', ') || 'none'}` +
@@ -1034,7 +1061,7 @@ function renderAssessment(receipt) {
   lines.push(`PUBLICATION: ${r.publication.verdict}` +
     (r.publication.identity ? `  identity=${r.publication.identity}` : '') +
     (r.publication.reference ? `  reference=${r.publication.reference}` : '') +
-    (r.publication.completedAt ? `  completedAt=${r.publication.completedAt}` : '') +
+    (r.publication.completedAt ? `  completedAt=${formatTimestamp(r.publication.completedAt)}` : '') +
     (r.publication.note ? `  (${r.publication.note})` : ''));
   lines.push('');
 
@@ -1058,14 +1085,14 @@ function renderAssessment(receipt) {
   } else {
     for (const v of r.retrievals) {
       lines.push(`  ${String(v.source).padEnd(12)} ${String(v.view || '-').padEnd(22)}` +
-        ` retrieved_at=${v.retrievedAt || 'unknown'}` +
+        ` retrieved_at=${formatTimestamp(v.retrievedAt)}` +
         `  checksum=${v.checksum || 'unknown'}` +
         `  age=${v.ageHours === null ? 'unknown' : v.ageHours + 'h'}` +
         `  timing=${v.timing || 'unknown'}` +
         `  evidence=${v.valid === true ? 'validated' : 'INVALID: ' + (v.reasons || []).join('; ')}`);
     }
   }
-  lines.push(`  freshness verdict: ${r.freshness.verdict} (as of ${r.freshness.asOf || 'unknown'}, cadence ${r.freshness.cadenceHours === null ? 'unknown' : r.freshness.cadenceHours + 'h'})`);
+  lines.push(`  freshness verdict: ${r.freshness.verdict} (as of ${formatTimestamp(r.freshness.asOf)}, cadence ${r.freshness.cadenceHours === null ? 'unknown' : r.freshness.cadenceHours + 'h'})`);
   for (const p of r.freshness.problems || []) lines.push(`    - ${p}`);
   if (r.freshness.sourcePublication && r.freshness.sourcePublication.established === false) {
     lines.push(`    - source publication: not established -- ${r.freshness.sourcePublication.note}`);
@@ -1081,7 +1108,7 @@ function renderAssessment(receipt) {
     (r.rejectedRecords.reason ? `  (${r.rejectedRecords.reason})` : ''));
   lines.push(`  deployment: verdict=${r.deployment.verdict}` +
     `  reference=${r.deployment.reference || 'none'}` +
-    `  completedAt=${r.deployment.completedAt || 'unknown'}` +
+    `  completedAt=${formatTimestamp(r.deployment.completedAt)}` +
     (r.deployment.identity ? `  identity=${r.deployment.identity.verdict}` : '') +
     (r.deployment.identity && r.deployment.identity.reason ? `  (${r.deployment.identity.reason})` : ''));
   lines.push('');
@@ -1089,12 +1116,12 @@ function renderAssessment(receipt) {
   if (r.refreshSelection) {
     lines.push('Refresh selection');
     lines.push(`  verdict=${r.refreshSelection.verdict}` +
-      `  observation=${r.refreshSelection.observationTime || 'unknown'}` +
+      `  observation=${formatTimestamp(r.refreshSelection.observationTime)}` +
       `  observationKnown=${r.refreshSelection.observationKnown}`);
     for (const c of r.refreshSelection.candidates) {
       lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${c.runId ?? 'unknown'}` +
         `  attempt=${formatAttempt(c.attempt)}` +
-        `  completedAt=${c.completedAt || 'unknown'}` +
+        `  completedAt=${formatTimestamp(c.completedAt)}` +
         `  orderable=${c.orderable}` +
         `  futureDated=${c.futureDated === null ? 'unknown' : c.futureDated}` +
         `  verified=${c.verified}` +
@@ -1102,7 +1129,7 @@ function renderAssessment(receipt) {
     }
     if (r.refreshSelection.superseded.length) {
       for (const s of r.refreshSelection.superseded) {
-        lines.push(`  superseded: ${s.source} run=${s.runId ?? 'unknown'} completedAt=${s.completedAt || 'unknown'}`);
+        lines.push(`  superseded: ${s.source} run=${s.runId ?? 'unknown'} completedAt=${formatTimestamp(s.completedAt)}`);
       }
     }
     lines.push(`  ${r.refreshSelection.note}`);
@@ -1142,9 +1169,9 @@ function renderAssessment(receipt) {
   lines.push('');
   lines.push(`Last attempt: run ${r.run.runId} (attempt ${formatAttempt(r.run.attempt)})` +
     `  verdict=${r.refreshVerdict}  publication=${r.publication.verdict}` +
-    `  startedAt=${r.run.startedAt || 'unknown'}`);
+    `  startedAt=${formatTimestamp(r.run.startedAt)}`);
   lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${r.lastSuccessfulRefresh.runId} (attempt ${formatAttempt(r.lastSuccessfulRefresh.attempt)})`}` +
-    (r.lastSuccessfulRefresh.completedAt ? `  completedAt=${r.lastSuccessfulRefresh.completedAt}` : '') +
+    (r.lastSuccessfulRefresh.completedAt ? `  completedAt=${formatTimestamp(r.lastSuccessfulRefresh.completedAt)}` : '') +
     (r.lastSuccessfulRefresh.note ? `  -- ${r.lastSuccessfulRefresh.note}` : ''));
   lines.push('This receipt evaluates LOCAL SAVED EVIDENCE ONLY. It is not a live observation of any provider,');
   lines.push('of D1, or of the deployed site, and it is not by itself operational acceptance.');

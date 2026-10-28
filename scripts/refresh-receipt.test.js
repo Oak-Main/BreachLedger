@@ -1113,7 +1113,7 @@ test('readable assessments mark retained invalid prior attempts without coercing
 test('a stale retrieval cannot mask another required source with invalid timing', () => {
   for (const invalid of [undefined, 'not-a-date', '2026-02-30T00:00:00.000Z', '2026-10-26T06:00:00.000Z']) {
     const c = greenCase();
-    c.evidence.retrievals[0].retrieved_at = '2026-10-20T06:00:00.000Z';
+    c.expectations.cadenceHours = 0.5;
     c.evidence.retrievals[1].retrieved_at = invalid;
     const r = evaluateReceipt(c);
     assert.equal(r.freshness.verdict, 'unknown', String(invalid));
@@ -1127,7 +1127,7 @@ test('a stale retrieval cannot mask another required source with invalid timing'
 test('valid stale-only and valid recent timing retain their distinct verdicts', () => {
   const c = greenCase();
   assert.equal(evaluateReceipt(c).freshness.verdict, 'within_cadence');
-  c.evidence.retrievals[0].retrieved_at = '2026-10-20T06:00:00.000Z';
+  c.expectations.asOf = '2026-10-26T07:00:00Z';
   const r = evaluateReceipt(c);
   assert.equal(r.freshness.verdict, 'exceeds_cadence');
   assert.deepEqual(r.freshness.problems, []);
@@ -1318,6 +1318,167 @@ test('future retrieval validation preserves a failed stage verdict', () => {
   assert.equal(r.refreshVerdict, 'failed');
   assert.equal(r.failingStage, 'tests');
   assert.equal(r.verification.verdict, 'not_applicable');
+});
+
+// --- Recorded run bounds constrain this run's retrieval evidence ----------
+
+test('a recorded completion before the recorded start is inconsistent provenance', () => {
+  for (const [completedAt, valid] of [
+    ['2026-10-25T06:01:59.999Z', false],
+    ['2026-10-25T06:02:00.000Z', true],
+    ['2026-10-25T06:02:00.001Z', true],
+  ]) {
+    for (const asOf of ['2026-10-25T07:00:00Z', undefined, 'invalid-as-of']) {
+      const c = greenCase();
+      c.evidence.startedAt = '2026-10-25T06:02:00.000Z';
+      c.evidence.completedAt = completedAt;
+      c.expectations.asOf = asOf;
+      for (const row of c.evidence.retrievals) row.retrieved_at = c.evidence.startedAt;
+      const r = evaluateReceipt(c);
+      assert.equal(r.refreshVerdict, valid ? 'success' : 'unknown');
+      assert.equal(r.verification.provenanceComplete, valid);
+      assert.equal(r.refreshSelection.candidates[0].verified, valid);
+      if (!valid) assert.ok(r.verification.problems.some((p) => /completed before.*start/.test(p)));
+    }
+  }
+});
+
+test('retrievals outside known run bounds cannot count as this run evidence', () => {
+  const boundaries = [
+    ['2026-10-25T05:59:59.999Z', false, /before.*start/],
+    ['2026-10-25T06:00:00.000Z', true],
+    ['2026-10-25T06:00:00.001Z', true],
+    ['2026-10-25T06:03:43.999Z', true],
+    ['2026-10-25T06:03:44.000Z', true],
+    ['2026-10-25T06:03:44.001Z', false, /after.*completion/],
+  ];
+  for (const [retrievedAt, valid, reason] of boundaries) {
+    for (const asOf of ['2026-10-25T07:00:00Z', undefined, 'invalid-as-of']) {
+      const c = greenCase();
+      c.evidence.startedAt = '2026-10-25T06:00:00.000Z';
+      c.evidence.retrievals[0].retrieved_at = retrievedAt;
+      c.expectations.asOf = asOf;
+      const r = evaluateReceipt(c);
+      assert.equal(r.retrievals[0].valid, valid, retrievedAt);
+      assert.equal(r.refreshVerdict, valid ? 'success' : 'unknown');
+      assert.equal(r.sourceSelection.verified.includes('hhs_ocr'), valid);
+      if (!valid) {
+        assert.equal(r.retrievals[0].timing, 'invalid');
+        assert.ok(r.retrievals[0].reasons.some((p) => reason.test(p)));
+        assert.equal(r.retrievals[0].ageMs, null);
+        assert.equal(r.freshness.verdict, 'unknown');
+      }
+    }
+  }
+});
+
+test('an unknown start does not invent a lower retrieval bound or a new required field', () => {
+  for (const startedAt of [undefined, null, '', 'not-a-date', '2026-02-30T00:00:00Z', { toString: null }]) {
+    const c = greenCase();
+    c.evidence.startedAt = startedAt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.ok(r.retrievals.every((row) => row.valid));
+    assert.doesNotThrow(() => renderAssessment(r));
+  }
+});
+
+test('inconsistent run timing never promotes a singleton or a competing current candidate', () => {
+  for (const prior of [undefined, { runId: 'prior', completedAt: '2026-10-24T00:00:00Z' }]) {
+    const c = greenCase();
+    c.evidence.completedAt = '2026-10-25T05:59:59.999Z';
+    if (prior) c.expectations.lastSuccessful = prior;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run').verified, false);
+    assert.equal(r.refreshSelection.selected, null);
+    assert.equal(r.refreshSelection.verdict, prior ? 'ambiguous' : 'unknown');
+    if (prior) assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').verified, false);
+  }
+});
+
+// --- Completion evidence is required independently of freshness ----------
+
+test('missing or malformed run completion cannot verify a successful refresh', () => {
+  const completions = [undefined, null, '', '   ', 'not-a-date', '2026-02-30T00:00:00Z', 123, true, false, [], {}, { toString: null }];
+  for (let i = 0; i < completions.length; i++) {
+    for (const asOf of ['2026-10-25T07:00:00Z', undefined, 'invalid-as-of']) {
+      const c = greenCase();
+      c.evidence.completedAt = completions[i];
+      c.expectations.asOf = asOf;
+      const r = evaluateReceipt(c);
+      assert.equal(r.verification.stageOutcome, 'all_succeeded', `completion case ${i}`);
+      assert.equal(r.refreshVerdict, 'unknown', `completion case ${i}`);
+      assert.equal(r.verification.verdict, 'unverified');
+      assert.equal(r.verification.provenanceComplete, false);
+      assert.ok(r.verification.problems.some((p) => /run completion instant/.test(p)));
+      assert.ok(r.missingProof.some((p) => /run completion instant/.test(p)));
+      assert.equal(r.refreshSelection.candidates[0].verified, false);
+      assert.equal(r.refreshSelection.candidates[0].orderable, false);
+      assert.equal(r.refreshSelection.selected, null);
+      assert.equal(r.lastSuccessfulRefresh.verdict, 'unknown');
+      assert.deepEqual(r.run.completedAt, completions[i] ?? null);
+      assert.doesNotThrow(() => renderAssessment(r));
+    }
+  }
+});
+
+test('valid run completion preserves success even when freshness observation is unknown', () => {
+  for (const completedAt of ['2026-10-25T06:03:44Z', '2026-10-25T06:03:44.000Z', '2026-10-25T06:03:44+00:00']) {
+    for (const asOf of [undefined, null, 'invalid-as-of', '2026-02-30T00:00:00Z', 123, false, [], { toString: null }]) {
+      const c = greenCase();
+      c.evidence.completedAt = completedAt;
+      c.expectations.asOf = asOf;
+      const r = evaluateReceipt(c);
+      assert.equal(r.refreshVerdict, 'success');
+      assert.equal(r.verification.provenanceComplete, true);
+      assert.equal(r.freshness.verdict, 'unknown');
+      assert.equal(r.refreshSelection.observationKnown, false);
+      assert.equal(r.refreshSelection.candidates[0].verified, true);
+      assert.equal(r.refreshSelection.candidates[0].futureDated, null);
+      assert.ok(r.retrievals.every((row) => row.ageMs === null && row.withinOneCadence === null));
+      assert.doesNotThrow(() => renderAssessment(r));
+    }
+  }
+});
+
+test('unknown completion cannot promote the current run over a declared prior', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.evidence.completedAt = completedAt;
+    c.expectations.lastSuccessful = { runId: 'prior', completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.refreshSelection.verdict, 'ambiguous');
+    assert.equal(r.refreshSelection.selected, null);
+    assert.ok(r.refreshSelection.candidates.every((candidate) => candidate.verified === false));
+    assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').runId, 'prior');
+  }
+});
+
+test('missing completion preserves failed stages and refuses an unverified dry-run claim', () => {
+  const failed = greenCase();
+  delete failed.evidence.completedAt;
+  failed.evidence.jobs[0].steps.find((step) => step.name === 'Run npm test').conclusion = 'failure';
+  const failedReceipt = evaluateReceipt(failed);
+  assert.equal(failedReceipt.refreshVerdict, 'failed');
+  assert.equal(failedReceipt.failingStage, 'tests');
+  assert.equal(failedReceipt.verification.verdict, 'not_applicable');
+  const dry = greenCase();
+  delete dry.evidence.completedAt;
+  dry.evidence.dryRun = true;
+  const dryReceipt = evaluateReceipt(dry);
+  assert.equal(dryReceipt.refreshVerdict, 'unknown');
+  assert.equal(dryReceipt.verification.verdict, 'unverified');
+  assert.equal(dryReceipt.publication.verdict, 'not_published');
+});
+
+test('malformed completion display preserves raw evidence without coercing objects', () => {
+  const c = greenCase();
+  c.evidence.completedAt = { toString: null };
+  const r = evaluateReceipt(c);
+  assert.deepEqual(r.refreshSelection.candidates[0].completedAt, { toString: null });
+  assert.match(renderAssessment(r), /completedAt=invalid/);
 });
 
 // --- The checker itself must stay offline and inert on import -------------
