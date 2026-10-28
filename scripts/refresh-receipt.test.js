@@ -904,6 +904,124 @@ test('retrieval and artifact bindings from another attempt cannot stand in for t
   assert.equal(r.lastSuccessfulRefresh.runId, null);
 });
 
+// GitHub attempts start at 1 and increment per rerun. Receipt evidence uses
+// numeric attempts; context/environment strings must not be coerced here.
+const INVALID_ATTEMPTS = ['1', '2', '', ' ', {}, [], true, false,
+  NaN, Infinity, -Infinity, 0, -0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1];
+
+test('absent and null optional attempt bindings remain optional', () => {
+  for (const attempt of [undefined, null]) {
+    const c = greenCase();
+    for (const row of c.evidence.retrievals) row.attempt = attempt;
+    c.evidence.artifacts[0].attempt = attempt;
+    c.expectations.expectedAttempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.artifacts[0].verdict, 'present');
+    assert.equal(r.artifacts[0].attempt, null);
+    assert.ok(r.retrievals.every((row) => row.valid));
+    assert.equal(r.revision.attemptMatches, null);
+  }
+});
+
+test('matching positive safely represented numeric attempts retain success', () => {
+  for (const attempt of [1, 2, Number.MAX_SAFE_INTEGER]) {
+    const c = greenCase();
+    c.evidence.attempt = attempt;
+    c.expectations.expectedAttempt = attempt;
+    c.evidence.artifacts[0].attempt = attempt;
+    for (const row of c.evidence.retrievals) row.attempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success', String(attempt));
+    assert.equal(r.revision.attemptMatches, true);
+    assert.equal(r.artifacts[0].verdict, 'present');
+    assert.ok(r.retrievals.every((row) => row.valid));
+  }
+});
+
+test('present malformed artifact attempts are rejected without erasing their supplied value', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.evidence.artifacts[0].attempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.equal(r.artifacts[0].verdict, 'rejected');
+    assert.match(r.artifacts[0].reason, /positive safe integer/);
+    assert.ok(Object.is(r.artifacts[0].attempt, attempt), 'the invalid binding must not become null');
+    assert.equal(r.lastSuccessfulRefresh.runId, null);
+  }
+});
+
+test('present malformed retrieval attempts are invalid evidence rather than optional bindings', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    for (const row of c.evidence.retrievals) row.attempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.deepEqual(r.sourceSelection.verified, []);
+    assert.ok(r.retrievals.every((row) => !row.valid && row.reasons.some((reason) => /positive safe integer/.test(reason))));
+  }
+});
+
+test('a run needs a valid numeric attempt and retains malformed supplied identity for diagnosis', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.evidence.attempt = attempt;
+    c.expectations.expectedAttempt = null;
+    c.evidence.artifacts = [];
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.ok(Object.is(r.run.attempt, attempt), 'the run attempt must not be silently erased');
+    assert.ok(r.verification.problems.some((reason) => /positive safe integer/.test(reason)));
+    assert.equal(r.lastSuccessfulRefresh.runId, null);
+  }
+});
+
+test('a malformed expected attempt cannot silently disable the expected-attempt constraint', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.expectations.expectedAttempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.equal(r.revision.attemptMatches, false);
+    assert.ok(r.missingProof.some((reason) => /expected attempt must be a positive safe integer/.test(reason)));
+  }
+});
+
+test('declared prior successes with absent, null or valid numeric attempts remain reported', () => {
+  for (const attempt of [undefined, null, 1, 2, Number.MAX_SAFE_INTEGER]) {
+    const c = greenCase();
+    c.evidence.completedAt = '2026-10-26T00:00:00Z';
+    c.expectations.lastSuccessful = { runId: 'prior', attempt, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.lastSuccessfulRefresh.verdict, 'reported');
+    assert.equal(r.lastSuccessfulRefresh.attempt, attempt ?? null);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.verified, false);
+    assert.equal(prior.excluded, false);
+  }
+});
+
+test('a malformed declared attempt is retained and excluded without being mislabeled as a future completion', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.evidence.completedAt = '2026-10-26T00:00:00Z';
+    c.expectations.lastSuccessful = { runId: 'prior', attempt, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.lastSuccessfulRefresh.verdict, 'unknown', String(attempt));
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.ok(Object.is(prior.attempt, attempt));
+    assert.equal(prior.verified, false);
+    assert.equal(prior.futureDated, false);
+    assert.equal(prior.excluded, true);
+    assert.match(prior.reason, /positive safe integer/);
+    assert.ok(r.notes.some((note) => /invalid supplied attempt/.test(note)));
+    const futureNote = r.notes.find((note) => /completed after the receipt observation time/.test(note));
+    assert.ok(futureNote);
+    assert.ok(!futureNote.includes('prior'), 'invalid declared attempt must not be called a future completion');
+  }
+});
+
 test('a stale retrieval cannot mask another required source with invalid timing', () => {
   for (const invalid of [undefined, 'not-a-date', '2026-02-30T00:00:00.000Z', '2026-10-26T06:00:00.000Z']) {
     const c = greenCase();

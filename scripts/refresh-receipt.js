@@ -131,6 +131,12 @@ function isNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+// GitHub attempts start at 1 and increment on reruns. Receipt identities use
+// numbers, with safe-integer precision required for exact binding comparisons.
+function isAttempt(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 function hasRunIdentity(value) {
   return (typeof value === 'string' && value.trim() !== '') ||
     (isNumber(value) && Number.isInteger(value) && value > 0);
@@ -229,7 +235,9 @@ function validateRetrievalRow(row, run) {
     else if (row.runId !== run.runId) reasons.push('the retrieval belongs to a different run');
   }
   if (row.attempt != null) {
-    if (run.attempt === null) reasons.push('the retrieval attempt binding cannot be checked because the run attempt is not recorded');
+    if (!isAttempt(row.attempt)) reasons.push('the retrieval attempt must be a positive safe integer');
+    else if (run.attempt === null) reasons.push('the retrieval attempt binding cannot be checked because the run attempt is not recorded');
+    else if (!isAttempt(run.attempt)) reasons.push('the retrieval attempt binding cannot be checked because the run attempt must be a positive safe integer');
     else if (row.attempt !== run.attempt) reasons.push('the retrieval belongs to a different attempt');
   }
   if (row.sha != null) {
@@ -262,7 +270,7 @@ function evaluateReceipt(caseData) {
     repository: evidence.repository ?? null,
     workflowPath: evidence.workflowPath ?? null,
     runId: evidence.runId ?? null,
-    attempt: isNumber(evidence.attempt) ? evidence.attempt : null,
+    attempt: evidence.attempt ?? null,
     event: evidence.event ?? null,
     branch: evidence.branch ?? null,
     headSha: evidence.headSha ?? null,
@@ -271,16 +279,18 @@ function evaluateReceipt(caseData) {
     completedAt: evidence.completedAt ?? null,
   };
   ref('evidence.runId', run.runId);
+  ref('evidence.attempt', run.attempt);
   ref('evidence.headSha', run.headSha);
   ref('evidence.checkedOutSha', run.checkedOutSha);
 
   // A receipt that describes a different revision, or a different attempt of
   // the run, cannot satisfy a claim about this revision.
   const expectedSha = expectations.expectedHeadSha || null;
-  const expectedAttempt = isNumber(expectations.expectedAttempt) ? expectations.expectedAttempt : null;
+  const expectedAttempt = expectations.expectedAttempt ?? null;
   const revisionMatches = expectedSha ? run.headSha === expectedSha : null;
   const checkoutMatches = expectedSha ? run.checkedOutSha === expectedSha : null;
-  const attemptMatches = expectedAttempt ? run.attempt === expectedAttempt : null;
+  const attemptMatches = expectedAttempt === null ? null :
+    isAttempt(expectedAttempt) && isAttempt(run.attempt) && run.attempt === expectedAttempt;
 
   if (revisionMatches === false) {
     missingProof.push(`the run's head SHA (${run.headSha}) is not the expected revision (${expectedSha})`);
@@ -288,7 +298,9 @@ function evaluateReceipt(caseData) {
   if (checkoutMatches === false) {
     missingProof.push(`the checkout SHA (${run.checkedOutSha}) does not match the expected revision (${expectedSha})`);
   }
-  if (attemptMatches === false) {
+  if (expectedAttempt !== null && !isAttempt(expectedAttempt)) {
+    missingProof.push('the expected attempt must be a positive safe integer');
+  } else if (attemptMatches === false) {
     missingProof.push(`run attempt ${run.attempt} is not the expected attempt ${expectedAttempt}`);
   }
 
@@ -558,7 +570,7 @@ function evaluateReceipt(caseData) {
     const row = {
       name: a.name ?? null,
       runId: a.runId ?? null,
-      attempt: isNumber(a.attempt) ? a.attempt : null,
+      attempt: a.attempt ?? null,
       sha: a.sha ?? null,
       uploaded: a.uploaded === true,
       files: Array.isArray(a.files) ? a.files : [],
@@ -571,9 +583,15 @@ function evaluateReceipt(caseData) {
     } else if (row.runId != null && row.runId !== run.runId) {
       row.verdict = 'rejected';
       row.reason = 'the artifact belongs to a different run';
+    } else if (row.attempt !== null && !isAttempt(row.attempt)) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact attempt must be a positive safe integer';
     } else if (row.attempt !== null && run.attempt === null) {
       row.verdict = 'rejected';
       row.reason = 'the artifact attempt binding cannot be checked because the run attempt is not recorded';
+    } else if (row.attempt !== null && !isAttempt(run.attempt)) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact attempt binding cannot be checked because the run attempt must be a positive safe integer';
     } else if (row.attempt !== null && row.attempt !== run.attempt) {
       row.verdict = 'rejected';
       row.reason = 'the artifact belongs to a different attempt';
@@ -688,6 +706,8 @@ function evaluateReceipt(caseData) {
         }
         if (run.attempt === null) {
           provenanceProblems.push('the run attempt is not recorded');
+        } else if (!isAttempt(run.attempt)) {
+          provenanceProblems.push('the run attempt must be a positive safe integer');
         }
         if (!hasRunIdentity(run.runId)) {
           provenanceProblems.push('the run identifier is not recorded');
@@ -779,7 +799,10 @@ function evaluateReceipt(caseData) {
     // `futureDated` is only knowable when the receipt has an observation
     // time. Without one it stays null -- unknown, not false.
     const futureDated = placeable && observationKnown ? orderMs > asOfMs : null;
-    const excluded = futureDated === true;
+    // Declared prior successes may omit an attempt, but a supplied malformed
+    // attempt is evidence of an invalid identity, not optional missing data.
+    const invalidAttempt = attempt != null && !isAttempt(attempt);
+    const excluded = futureDated === true || invalidAttempt;
     return {
       source,
       runId,
@@ -788,10 +811,11 @@ function evaluateReceipt(caseData) {
       orderMs,
       placeable,
       futureDated,
+      invalidAttempt,
       excluded,
-      exclusionReason: excluded
+      exclusionReason: futureDated === true
         ? 'the candidate completed after the receipt observation time, so it cannot be an already evidenced success'
-        : null,
+        : (invalidAttempt ? 'the candidate attempt must be a positive safe integer' : null),
       verified,
     };
   };
@@ -802,14 +826,15 @@ function evaluateReceipt(caseData) {
   }
   for (const d of declaredSuccesses) {
     selectionCandidates.push(buildSelectionCandidate(
-      'declared', d.runId ?? null, isNumber(d.attempt) ? d.attempt : null, d.completedAt ?? null, false,
+      'declared', d.runId ?? null, d.attempt ?? null, d.completedAt ?? null, false,
     ));
   }
 
   let selectionVerdict = 'unknown';
   let selected = null;
   const superseded = [];
-  const excludedCandidates = selectionCandidates.filter((c) => c.excluded);
+  const futureCandidates = selectionCandidates.filter((c) => c.futureDated === true);
+  const invalidAttemptCandidates = selectionCandidates.filter((c) => c.invalidAttempt);
   const selectable = selectionCandidates.filter((c) => !c.excluded);
 
   if (selectionCandidates.length === 0) {
@@ -854,12 +879,15 @@ function evaluateReceipt(caseData) {
       superseded.push(...sorted.slice(1));
     }
   }
-  if (excludedCandidates.length) {
+  if (futureCandidates.length) {
     notes.push(
-      `${excludedCandidates.length} successful-refresh candidate(s) completed after the receipt observation time` +
+      `${futureCandidates.length} successful-refresh candidate(s) completed after the receipt observation time` +
       `${observationKnown ? ` (${asOf})` : ''} and cannot be an already evidenced success` +
-      `: ${excludedCandidates.map((c) => `${c.source} run ${c.runId ?? 'unknown'} at ${c.completedAt ?? 'unknown'}`).join(' | ')}`,
+      `: ${futureCandidates.map((c) => `${c.source} run ${c.runId ?? 'unknown'} at ${c.completedAt ?? 'unknown'}`).join(' | ')}`,
     );
+  }
+  if (invalidAttemptCandidates.length) {
+    notes.push(`${invalidAttemptCandidates.length} successful-refresh candidate(s) have an invalid supplied attempt and were excluded`);
   }
   if (selectionVerdict === 'ambiguous') {
     notes.push('the successful refreshes in this evidence could not be ordered, so the most recent one is not established');
