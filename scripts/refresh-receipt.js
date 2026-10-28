@@ -131,6 +131,11 @@ function isNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+function hasRunIdentity(value) {
+  return (typeof value === 'string' && value.trim() !== '') ||
+    (isNumber(value) && Number.isInteger(value) && value > 0);
+}
+
 function parseInstant(value) {
   if (typeof value !== 'string') return null;
   const t = Date.parse(value);
@@ -219,14 +224,17 @@ function validateRetrievalRow(row, run) {
     reasons.push('checksum is not a sha256 digest');
   }
 
-  if (row.runId != null && run.runId != null && row.runId !== run.runId) {
-    reasons.push('the retrieval belongs to a different run');
+  if (row.runId != null) {
+    if (!hasRunIdentity(run.runId)) reasons.push('the retrieval run binding cannot be checked because the run identifier is not recorded');
+    else if (row.runId !== run.runId) reasons.push('the retrieval belongs to a different run');
   }
-  if (row.attempt != null && run.attempt != null && row.attempt !== run.attempt) {
-    reasons.push('the retrieval belongs to a different attempt');
+  if (row.attempt != null) {
+    if (run.attempt === null) reasons.push('the retrieval attempt binding cannot be checked because the run attempt is not recorded');
+    else if (row.attempt !== run.attempt) reasons.push('the retrieval belongs to a different attempt');
   }
-  if (row.sha != null && run.headSha != null && row.sha !== run.headSha) {
-    reasons.push('the retrieval was produced from a different revision');
+  if (row.sha != null) {
+    if (!run.headSha) reasons.push('the retrieval revision binding cannot be checked because the run revision is not recorded');
+    else if (row.sha !== run.headSha) reasons.push('the retrieval was produced from a different revision');
   }
 
   return { instant, checksum, reasons, valid: reasons.length === 0 };
@@ -420,13 +428,13 @@ function evaluateReceipt(caseData) {
   const badTiming = freshnessRows.filter((r) => r.timing !== 'valid');
 
   if (freshnessProblems.length === 0) {
-    if (provablyStale) {
-      freshnessVerdict = 'exceeds_cadence';
-    } else if (badTiming.length) {
+    if (badTiming.length) {
       // Invalid timing is unknown, NOT stale. Claiming "exceeds_cadence" here
       // would assert a fact the evidence does not support.
       freshnessVerdict = 'unknown';
       freshnessProblems.push(`${badTiming.length} retrieval timestamp(s) are missing, malformed, impossible or in the future`);
+    } else if (provablyStale) {
+      freshnessVerdict = 'exceeds_cadence';
     } else {
       freshnessVerdict = 'within_cadence';
     }
@@ -491,6 +499,8 @@ function evaluateReceipt(caseData) {
   // Identity is verified only when the evidence names the specific deployed
   // artifact AND binds it to this run's revision.
   const identityArtifactSha = typeof deploymentRef.artifactSha === 'string' ? deploymentRef.artifactSha : null;
+  const invalidArtifactDigest = deploymentRef.artifactSha != null &&
+    (identityArtifactSha === null || !SHA256_HEX.test(identityArtifactSha));
   const identityDeploymentId = typeof deploymentRef.deploymentId === 'string' ? deploymentRef.deploymentId : null;
   const identityBoundSha = typeof deploymentRef.sha === 'string' ? deploymentRef.sha : null;
 
@@ -519,6 +529,10 @@ function evaluateReceipt(caseData) {
   } else if (!deployment.reference) {
     identity.verdict = 'unknown';
     identity.reason = 'no deployment reference was recorded';
+  } else if (invalidArtifactDigest) {
+    // A separate deployment id cannot make a supplied malformed digest valid.
+    identity.verdict = 'unproven';
+    identity.reason = 'the supplied artifact digest is not a sha256 digest';
   } else if (!identityArtifactSha && !identityDeploymentId) {
     identity.verdict = 'unproven';
     identity.reason = 'the deployment evidence names no deployed artifact (no artifact digest and no deployment id), so the reference cannot identify what was published';
@@ -551,13 +565,22 @@ function evaluateReceipt(caseData) {
       verdict: 'unknown',
       reason: null,
     };
-    if (row.runId && run.runId && row.runId !== run.runId) {
+    if (row.runId != null && !hasRunIdentity(run.runId)) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact run binding cannot be checked because the run identifier is not recorded';
+    } else if (row.runId != null && row.runId !== run.runId) {
       row.verdict = 'rejected';
       row.reason = 'the artifact belongs to a different run';
-    } else if (row.attempt !== null && run.attempt !== null && row.attempt !== run.attempt) {
+    } else if (row.attempt !== null && run.attempt === null) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact attempt binding cannot be checked because the run attempt is not recorded';
+    } else if (row.attempt !== null && row.attempt !== run.attempt) {
       row.verdict = 'rejected';
       row.reason = 'the artifact belongs to a different attempt';
-    } else if (row.sha && run.headSha && row.sha !== run.headSha) {
+    } else if (row.sha != null && !run.headSha) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact revision binding cannot be checked because the run revision is not recorded';
+    } else if (row.sha != null && row.sha !== run.headSha) {
       row.verdict = 'rejected';
       row.reason = 'the artifact was produced from a different revision';
     } else if (!row.uploaded) {
@@ -631,7 +654,7 @@ function evaluateReceipt(caseData) {
         // Every required stage succeeded. That alone is still not proof of a
         // refresh. Matching source NAMES is not enough either: the retrieval
         // evidence has to be there, it has to validate, and the run has to be
-        // bound to a revision and an attempt.
+        // bound to a run identifier, a revision and an attempt.
         stageOutcome = 'all_succeeded';
         if (expectedSources.length === 0) {
           provenanceProblems.push('no expected source list was supplied, so the retrieved source set cannot be checked');
@@ -654,9 +677,9 @@ function evaluateReceipt(caseData) {
           );
         }
         if (artifacts.some((a) => a.verdict === 'rejected')) {
-          provenanceProblems.push('an artifact belongs to a different run, attempt or revision');
+          provenanceProblems.push('an artifact binding cannot be validated against this run, attempt or revision');
         }
-        // A verified-success claim has to be bound to a revision and an
+        // A verified-success claim needs a run identifier, a revision and an
         // attempt. A run whose revision was never recorded cannot be quoted
         // as a verified refresh of that revision.
         const revisionBound = !!(run.headSha && run.checkedOutSha && run.headSha === run.checkedOutSha);
@@ -665,6 +688,9 @@ function evaluateReceipt(caseData) {
         }
         if (run.attempt === null) {
           provenanceProblems.push('the run attempt is not recorded');
+        }
+        if (!hasRunIdentity(run.runId)) {
+          provenanceProblems.push('the run identifier is not recorded');
         }
         if (provenanceProblems.length) {
           // Fail closed. "Every stage was green" is a fact about the stages.
@@ -790,9 +816,9 @@ function evaluateReceipt(caseData) {
     selectionVerdict = 'unknown';
   } else if (selectionCandidates.length === 1) {
     const only = selectionCandidates[0];
-    if (only.excluded) {
-      // A lone candidate that had not finished by the observation time is not
-      // an already evidenced success.
+    if (only.excluded || (only.source === 'this_run' && !only.verified)) {
+      // Being the only candidate does not supply missing provenance or make
+      // a future completion an already evidenced success.
       selectionVerdict = 'unknown';
     } else {
       selected = only;
@@ -805,8 +831,15 @@ function evaluateReceipt(caseData) {
   } else if (selectable.length === 0) {
     selectionVerdict = 'unknown';
   } else if (selectable.length === 1) {
-    selected = selectable[0];
-    selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
+    const only = selectable[0];
+    if (only.source === 'this_run' && !only.verified) {
+      // Excluding another candidate must not promote an unverified current
+      // run. Declared prior evidence retains its separate reported meaning.
+      selectionVerdict = 'unknown';
+    } else {
+      selected = only;
+      selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
+    }
   } else {
     const sorted = [...selectable].sort((a, b) => b.orderMs - a.orderMs);
     if (sorted[0].orderMs === sorted[1].orderMs) {
@@ -861,7 +894,7 @@ function evaluateReceipt(caseData) {
     // needing provenance.
     provenanceComplete: stageOutcome === 'all_succeeded' && provenanceProblems.length === 0,
     problems: provenanceProblems,
-    note: 'a verified refresh requires every required stage to have succeeded AND validated retrieval evidence for every expected source AND a run bound to a revision and an attempt',
+    note: 'a verified refresh requires every required stage to have succeeded AND validated retrieval evidence for every expected source AND a run identifier bound to a revision and an attempt',
   };
 
   const kind = data.kind || 'recorded';
