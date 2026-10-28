@@ -137,6 +137,11 @@ function isAttempt(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function formatAttempt(value) {
+  if (value == null) return 'unknown';
+  return isAttempt(value) ? String(value) : 'invalid';
+}
+
 function hasRunIdentity(value) {
   return (typeof value === 'string' && value.trim() !== '') ||
     (isNumber(value) && Number.isInteger(value) && value > 0);
@@ -301,7 +306,11 @@ function evaluateReceipt(caseData) {
   if (expectedAttempt !== null && !isAttempt(expectedAttempt)) {
     missingProof.push('the expected attempt must be a positive safe integer');
   } else if (attemptMatches === false) {
-    missingProof.push(`run attempt ${run.attempt} is not the expected attempt ${expectedAttempt}`);
+    if (run.attempt !== null && !isAttempt(run.attempt)) {
+      missingProof.push('the run attempt must be a positive safe integer');
+    } else {
+      missingProof.push(`run attempt ${run.attempt} is not the expected attempt ${expectedAttempt}`);
+    }
   }
 
   // --- Mode ---------------------------------------------------------------
@@ -1005,7 +1014,7 @@ function renderAssessment(receipt) {
   }
   lines.push(`Repository:  ${r.run.repository || 'unknown'}`);
   lines.push(`Workflow:    ${r.run.workflowPath || 'unknown'}`);
-  lines.push(`Run:         ${r.run.runId || 'unknown'} (attempt ${r.run.attempt === null ? 'unknown' : r.run.attempt})` +
+  lines.push(`Run:         ${r.run.runId || 'unknown'} (attempt ${formatAttempt(r.run.attempt)})` +
     `  event=${r.run.event || 'unknown'}  branch=${r.run.branch || 'unknown'}`);
   lines.push(`Revision:    head=${r.run.headSha || 'unknown'}`);
   lines.push(`             checked out=${r.run.checkedOutSha || 'unknown'}` +
@@ -1083,7 +1092,7 @@ function renderAssessment(receipt) {
       `  observationKnown=${r.refreshSelection.observationKnown}`);
     for (const c of r.refreshSelection.candidates) {
       lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${c.runId ?? 'unknown'}` +
-        `  attempt=${c.attempt === null ? 'unknown' : c.attempt}` +
+        `  attempt=${formatAttempt(c.attempt)}` +
         `  completedAt=${c.completedAt || 'unknown'}` +
         `  orderable=${c.orderable}` +
         `  futureDated=${c.futureDated === null ? 'unknown' : c.futureDated}` +
@@ -1130,10 +1139,10 @@ function renderAssessment(receipt) {
     for (const n of r.notes) lines.push(`  - ${n}`);
   }
   lines.push('');
-  lines.push(`Last attempt: run ${r.run.runId} (attempt ${r.run.attempt === null ? 'unknown' : r.run.attempt})` +
+  lines.push(`Last attempt: run ${r.run.runId} (attempt ${formatAttempt(r.run.attempt)})` +
     `  verdict=${r.refreshVerdict}  publication=${r.publication.verdict}` +
     `  startedAt=${r.run.startedAt || 'unknown'}`);
-  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${r.lastSuccessfulRefresh.runId} (attempt ${r.lastSuccessfulRefresh.attempt === null ? 'unknown' : r.lastSuccessfulRefresh.attempt})`}` +
+  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${r.lastSuccessfulRefresh.runId} (attempt ${formatAttempt(r.lastSuccessfulRefresh.attempt)})`}` +
     (r.lastSuccessfulRefresh.completedAt ? `  completedAt=${r.lastSuccessfulRefresh.completedAt}` : '') +
     (r.lastSuccessfulRefresh.note ? `  -- ${r.lastSuccessfulRefresh.note}` : ''));
   lines.push('This receipt evaluates LOCAL SAVED EVIDENCE ONLY. It is not a live observation of any provider,');

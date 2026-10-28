@@ -1072,6 +1072,44 @@ test('an eligible prior with unknown completion still prevents an invented newes
   }
 });
 
+const NONCOERCIBLE_ATTEMPTS = [{ toString: null }, { toString: null, valueOf: null },
+  [{ toString: null }], Object.create(null), ...INVALID_ATTEMPTS];
+
+test('malformed run attempts produce usable receipts and assessments without coercing objects', () => {
+  for (const attempt of NONCOERCIBLE_ATTEMPTS) {
+    for (const expectedAttempt of [1, null]) {
+      const c = greenCase();
+      c.evidence.attempt = attempt;
+      c.expectations.expectedAttempt = expectedAttempt;
+      let r;
+      assert.doesNotThrow(() => { r = evaluateReceipt(c); });
+      assert.equal(r.refreshVerdict, 'unknown');
+      assert.ok(Object.is(r.run.attempt, attempt), 'retain the original malformed evidence');
+      assert.ok(r.missingProof.some((reason) => /positive safe integer/.test(reason)));
+      let text;
+      assert.doesNotThrow(() => { text = renderAssessment(r); });
+      assert.match(text, /attempt invalid/);
+      assert.match(text, /VERDICT: unknown/);
+    }
+  }
+});
+
+test('readable assessments mark retained invalid prior attempts without coercing their values', () => {
+  for (const attempt of NONCOERCIBLE_ATTEMPTS) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: 'bad-prior', attempt, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, true);
+    assert.ok(Object.is(prior.attempt, attempt));
+    let text;
+    assert.doesNotThrow(() => { text = renderAssessment(r); });
+    assert.match(text, /attempt=invalid/);
+    assert.match(text, /candidate attempt must be a positive safe integer/);
+  }
+});
+
 test('a stale retrieval cannot mask another required source with invalid timing', () => {
   for (const invalid of [undefined, 'not-a-date', '2026-02-30T00:00:00.000Z', '2026-10-26T06:00:00.000Z']) {
     const c = greenCase();
