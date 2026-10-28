@@ -779,6 +779,10 @@ test('a run that completed after the observation time is not an evidenced succes
   assert.equal(cand.excluded, true);
   assert.match(cand.reason, /after the receipt observation time/);
   assert.ok(receipt.notes.some((n) => /after the receipt observation time/.test(n)));
+  // The readable assessment has to say WHY it was excluded.
+  const text = renderAssessment(receipt);
+  assert.match(text, /observationKnown=true/);
+  assert.match(text, /EXCLUDED: the candidate completed after the receipt observation time/);
 });
 
 test('a prior success that completed after the observation time is not selected, and the earlier legitimate success is retained', () => {

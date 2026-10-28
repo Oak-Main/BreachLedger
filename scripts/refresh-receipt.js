@@ -1017,13 +1017,17 @@ function renderAssessment(receipt) {
 
   if (r.refreshSelection) {
     lines.push('Refresh selection');
-    lines.push(`  verdict=${r.refreshSelection.verdict}`);
+    lines.push(`  verdict=${r.refreshSelection.verdict}` +
+      `  observation=${r.refreshSelection.observationTime || 'unknown'}` +
+      `  observationKnown=${r.refreshSelection.observationKnown}`);
     for (const c of r.refreshSelection.candidates) {
       lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${c.runId ?? 'unknown'}` +
         `  attempt=${c.attempt === null ? 'unknown' : c.attempt}` +
         `  completedAt=${c.completedAt || 'unknown'}` +
         `  orderable=${c.orderable}` +
-        `  verified=${c.verified}`);
+        `  futureDated=${c.futureDated === null ? 'unknown' : c.futureDated}` +
+        `  verified=${c.verified}` +
+        (c.excluded ? `  EXCLUDED: ${c.reason}` : ''));
     }
     if (r.refreshSelection.superseded.length) {
       for (const s of r.refreshSelection.superseded) {
