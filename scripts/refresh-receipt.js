@@ -372,6 +372,9 @@ function evaluateReceipt(caseData) {
   const asOf = expectations.asOf ?? null;
   const asOfParsed = parseReferenceInstant(asOf);
   const asOfMs = asOfParsed.valid ? asOfParsed.ms : null;
+  // Whether the receipt has a usable observation time at all. Every
+  // time-based comparison below is gated on this.
+  const observationKnown = asOfMs !== null;
   // An absent or non-positive cadence is not a freshness SLA. Defaulting one
   // in would invent a threshold the repository does not define, so the verdict
   // stays unknown instead.
@@ -385,8 +388,13 @@ function evaluateReceipt(caseData) {
     else if (r.retrievedAt === null || r.retrievedAt === undefined) timing = 'missing';
     // A retrieval stamped in the future has not happened yet. It is not
     // "fresh" -- it is invalid evidence.
-    if (timing === 'valid' && asOfMs !== null && r.instant.ms > asOfMs) timing = 'future';
-    const ageMs = timing === 'valid' ? asOfMs - r.instant.ms : null;
+    if (timing === 'valid' && observationKnown && r.instant.ms > asOfMs) timing = 'future';
+    // The age is only ever computed against a KNOWN observation time. An
+    // invalid or missing asOf must not take part in the subtraction: `null -
+    // instant` is a negative number, and a negative age compares as "within
+    // the cadence" -- so the row would carry a fabricated age and a true
+    // cadence flag while the aggregate verdict said "unknown".
+    const ageMs = (timing === 'valid' && observationKnown) ? asOfMs - r.instant.ms : null;
     return {
       source: r.source,
       view: r.view,
@@ -397,7 +405,9 @@ function evaluateReceipt(caseData) {
       reasons: r.reasons,
       ageMs,
       ageHours: ageMs === null ? null : Number((ageMs / 3600000).toFixed(3)),
-      withinOneCadence: (timing === 'valid' && cadenceValid) ? ageMs <= cadenceHours * 3600000 : null,
+      // A cadence flag needs an age to compare. Without one there is no
+      // flag, not a false one.
+      withinOneCadence: (ageMs !== null && cadenceValid) ? ageMs <= cadenceHours * 3600000 : null,
     };
   });
 
@@ -725,48 +735,80 @@ function evaluateReceipt(caseData) {
   // evidenced success wins -- but only when the ordering can be established.
   // When it cannot, the uncertainty is preserved rather than guessed away,
   // and an UNVERIFIED newer success never silently supersedes an earlier one.
+  //
+  // CONTRACT: a candidate whose completion time is LATER than the receipt's
+  // observation time had not finished when the receipt was taken. It cannot
+  // be an already evidenced success, so it is excluded from selection
+  // deterministically -- it is not treated as merely uncertain, and it is
+  // never ordered in as if it had happened. Its provenance stays in the
+  // candidate list, so nothing is erased.
   const declaredSuccesses = Array.isArray(expectations.lastSuccessfulRefreshes)
     ? expectations.lastSuccessfulRefreshes
     : (expectations.lastSuccessful ? [expectations.lastSuccessful] : []);
 
+  const buildSelectionCandidate = (source, runId, attempt, completedAt, verified) => {
+    const t = parseReferenceInstant(completedAt);
+    const orderMs = t.valid ? t.ms : null;
+    const placeable = orderMs !== null;
+    // `futureDated` is only knowable when the receipt has an observation
+    // time. Without one it stays null -- unknown, not false.
+    const futureDated = placeable && observationKnown ? orderMs > asOfMs : null;
+    const excluded = futureDated === true;
+    return {
+      source,
+      runId,
+      attempt,
+      completedAt: completedAt ?? null,
+      orderMs,
+      placeable,
+      futureDated,
+      excluded,
+      exclusionReason: excluded
+        ? 'the candidate completed after the receipt observation time, so it cannot be an already evidenced success'
+        : null,
+      verified,
+    };
+  };
+
   const selectionCandidates = [];
   if (stageOutcome === 'all_succeeded') {
-    const t = parseReferenceInstant(run.completedAt);
-    selectionCandidates.push({
-      source: 'this_run',
-      runId: run.runId,
-      attempt: run.attempt,
-      completedAt: run.completedAt,
-      orderMs: t.valid ? t.ms : null,
-      verified: refreshVerdict === 'success',
-    });
+    selectionCandidates.push(buildSelectionCandidate('this_run', run.runId, run.attempt, run.completedAt, refreshVerdict === 'success'));
   }
   for (const d of declaredSuccesses) {
-    const t = parseReferenceInstant(d.completedAt ?? null);
-    selectionCandidates.push({
-      source: 'declared',
-      runId: d.runId ?? null,
-      attempt: isNumber(d.attempt) ? d.attempt : null,
-      completedAt: d.completedAt ?? null,
-      orderMs: t.valid ? t.ms : null,
-      verified: false,
-    });
+    selectionCandidates.push(buildSelectionCandidate(
+      'declared', d.runId ?? null, isNumber(d.attempt) ? d.attempt : null, d.completedAt ?? null, false,
+    ));
   }
 
   let selectionVerdict = 'unknown';
   let selected = null;
   const superseded = [];
+  const excludedCandidates = selectionCandidates.filter((c) => c.excluded);
+  const selectable = selectionCandidates.filter((c) => !c.excluded);
+
   if (selectionCandidates.length === 0) {
     selectionVerdict = 'unknown';
   } else if (selectionCandidates.length === 1) {
-    selected = selectionCandidates[0];
-    selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
-  } else if (selectionCandidates.some((c) => c.orderMs === null)) {
-    // One of them cannot be placed on the timeline, so the newest one is not
-    // established.
+    const only = selectionCandidates[0];
+    if (only.excluded) {
+      // A lone candidate that had not finished by the observation time is not
+      // an already evidenced success.
+      selectionVerdict = 'unknown';
+    } else {
+      selected = only;
+      selectionVerdict = only.source === 'this_run' ? 'this_run' : 'reported';
+    }
+  } else if (selectionCandidates.some((c) => !c.placeable)) {
+    // A candidate that cannot be placed on the timeline might be the newest,
+    // so the newest evidenced success is not established.
     selectionVerdict = 'ambiguous';
+  } else if (selectable.length === 0) {
+    selectionVerdict = 'unknown';
+  } else if (selectable.length === 1) {
+    selected = selectable[0];
+    selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
   } else {
-    const sorted = [...selectionCandidates].sort((a, b) => b.orderMs - a.orderMs);
+    const sorted = [...selectable].sort((a, b) => b.orderMs - a.orderMs);
     if (sorted[0].orderMs === sorted[1].orderMs) {
       selectionVerdict = 'ambiguous';
     } else if (sorted[0].source === 'this_run' && !sorted[0].verified) {
@@ -779,25 +821,37 @@ function evaluateReceipt(caseData) {
       superseded.push(...sorted.slice(1));
     }
   }
+  if (excludedCandidates.length) {
+    notes.push(
+      `${excludedCandidates.length} successful-refresh candidate(s) completed after the receipt observation time` +
+      `${observationKnown ? ` (${asOf})` : ''} and cannot be an already evidenced success` +
+      `: ${excludedCandidates.map((c) => `${c.source} run ${c.runId ?? 'unknown'} at ${c.completedAt ?? 'unknown'}`).join(' | ')}`,
+    );
+  }
   if (selectionVerdict === 'ambiguous') {
     notes.push('the successful refreshes in this evidence could not be ordered, so the most recent one is not established');
   }
 
   const refreshSelection = {
     verdict: selectionVerdict,
+    observationTime: asOf,
+    observationKnown,
     candidates: selectionCandidates.map((c) => ({
       source: c.source,
       runId: c.runId,
       attempt: c.attempt,
       completedAt: c.completedAt,
-      orderable: c.orderMs !== null,
+      orderable: c.placeable,
+      futureDated: c.futureDated,
+      excluded: c.excluded,
+      reason: c.exclusionReason,
       verified: c.verified,
     })),
     selected: selected
       ? { source: selected.source, runId: selected.runId, attempt: selected.attempt, completedAt: selected.completedAt }
       : null,
     superseded: superseded.map((c) => ({ source: c.source, runId: c.runId, completedAt: c.completedAt })),
-    note: 'the newest evidenced successful refresh wins; a newer success that cannot be verified does not supersede an earlier one',
+    note: 'the newest evidenced successful refresh wins; a run that had not finished by the receipt observation time is not an evidenced success, and a newer success that cannot be verified does not supersede an earlier one',
   };
 
   const verification = {

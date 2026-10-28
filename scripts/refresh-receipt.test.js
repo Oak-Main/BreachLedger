@@ -693,6 +693,132 @@ test('a run with no recorded revision is not a verified success', () => {
   assert.ok(receipt.verification.problems.some((p) => /not bound to a single revision/.test(p)));
 });
 
+// --- The observation time is validated before any row-level arithmetic -----
+//
+// A missing, malformed or impossible asOf used to become null and take part
+// in the per-row subtraction: `null - instant` is a negative number, and a
+// negative age compares as "within the cadence". The aggregate verdict said
+// "unknown" while every row carried a fabricated age and a true cadence flag.
+
+test('an invalid observation time produces no fabricated age or cadence flag', () => {
+  const variants = [
+    ['missing', (c) => { delete c.expectations.asOf; }],
+    ['malformed', (c) => { c.expectations.asOf = 'not-a-date'; }],
+    ['an impossible calendar date', (c) => { c.expectations.asOf = '2026-02-30T00:00:00Z'; }],
+  ];
+  for (const [label, mutate] of variants) {
+    const c = JSON.parse(JSON.stringify(syntheticByPrefix('SYNTHETIC: every required stage succeeds')));
+    mutate(c);
+    const receipt = evaluateReceipt(c);
+    // The aggregate is unknown...
+    assert.equal(receipt.freshness.verdict, 'unknown', label);
+    assert.ok(receipt.freshness.problems.some((p) => /as-of instant/.test(p)), label);
+    // ...and no individual row disagrees with it.
+    assert.ok(receipt.freshness.bySource.length > 0, label);
+    for (const row of receipt.freshness.bySource) {
+      assert.equal(row.ageMs, null, `${label}: ageMs must not be fabricated`);
+      assert.equal(row.ageHours, null, `${label}: ageHours must not be fabricated`);
+      assert.equal(row.withinOneCadence, null, `${label}: withinOneCadence must not be true`);
+      // The timestamp itself is well formed; only the observation time is not.
+      assert.equal(row.timing, 'valid', label);
+    }
+  }
+});
+
+test('a retrieval in the past is aged against the observation time', () => {
+  const c = JSON.parse(JSON.stringify(syntheticByPrefix('SYNTHETIC: every required stage succeeds')));
+  c.expectations.asOf = '2026-10-25T12:00:00Z';
+  const receipt = evaluateReceipt(c);
+  assert.equal(receipt.freshness.verdict, 'within_cadence');
+  const row = receipt.freshness.bySource[0];
+  assert.equal(row.timing, 'valid');
+  assert.equal(row.ageMs, Date.parse('2026-10-25T12:00:00Z') - Date.parse(row.retrievedAt));
+  assert.ok(row.ageMs > 0, 'a retrieval in the past must have a positive age');
+  assert.equal(row.withinOneCadence, true);
+});
+
+test('a retrieval at the observation time has no age and is within one cadence', () => {
+  const c = JSON.parse(JSON.stringify(syntheticByPrefix('SYNTHETIC: every required stage succeeds')));
+  c.expectations.asOf = '2026-10-25T06:01:10.500Z';   // exactly the first retrieval
+  const receipt = evaluateReceipt(c);
+  const row = receipt.freshness.bySource[0];
+  assert.equal(row.timing, 'valid');
+  assert.equal(row.ageMs, 0);
+  assert.equal(row.withinOneCadence, true);
+});
+
+test('a retrieval after the observation time is never within cadence', () => {
+  const c = JSON.parse(JSON.stringify(syntheticByPrefix('SYNTHETIC: every required stage succeeds')));
+  c.expectations.asOf = '2026-10-25T06:00:00Z';   // before both retrievals
+  const receipt = evaluateReceipt(c);
+  assert.notEqual(receipt.freshness.verdict, 'within_cadence');
+  for (const row of receipt.freshness.bySource) {
+    assert.equal(row.timing, 'future');
+    assert.equal(row.ageMs, null);
+    assert.equal(row.withinOneCadence, null);
+  }
+});
+
+// --- A run that had not finished is not an evidenced success --------------
+//
+// The receipt's observation time is when the evidence was taken. A run that
+// completed after it cannot be an already evidenced success, so it cannot be
+// selected as the latest one. It is excluded deterministically, and its
+// provenance is kept rather than erased.
+
+test('a run that completed after the observation time is not an evidenced success', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: the current run completed after the receipt observation time'));
+  assert.equal(receipt.refreshSelection.verdict, 'unknown');
+  assert.equal(receipt.refreshSelection.selected, null);
+  assert.equal(receipt.lastSuccessfulRefresh.verdict, 'unknown');
+  assert.equal(receipt.lastSuccessfulRefresh.runId, null);
+  // The candidate is still listed, with the reason it was excluded.
+  const cand = receipt.refreshSelection.candidates.find((c) => c.source === 'this_run');
+  assert.ok(cand, 'the candidate must not be erased');
+  assert.equal(cand.futureDated, true);
+  assert.equal(cand.excluded, true);
+  assert.match(cand.reason, /after the receipt observation time/);
+  assert.ok(receipt.notes.some((n) => /after the receipt observation time/.test(n)));
+});
+
+test('a prior success that completed after the observation time is not selected, and the earlier legitimate success is retained', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: the prior success completed after the receipt observation time'));
+  // The legitimate, earlier success is retained and selected.
+  assert.equal(receipt.refreshSelection.verdict, 'this_run');
+  assert.equal(receipt.refreshSelection.selected.source, 'this_run');
+  assert.equal(receipt.refreshSelection.selected.runId, receipt.run.runId);
+  assert.equal(receipt.lastSuccessfulRefresh.verdict, 'this_run');
+  // The future-dated candidate is excluded, not silently ordered in.
+  const future = receipt.refreshSelection.candidates.find((c) => c.source === 'declared');
+  assert.ok(future, 'the excluded candidate must not be erased');
+  assert.equal(future.runId, '40085137740');
+  assert.equal(future.futureDated, true);
+  assert.equal(future.excluded, true);
+  assert.ok(!receipt.refreshSelection.superseded.some((s) => s.runId === '40085137740'));
+});
+
+test('the newest evidenced success is the newest one that finished at or before the observation time', () => {
+  // Normal ordering is unchanged: the current run finished after the declared
+  // success, both before the observation time, so the current run wins.
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: a newer verified success supersedes the declared earlier success'));
+  assert.equal(receipt.refreshSelection.verdict, 'this_run');
+  assert.equal(receipt.refreshSelection.selected.runId, receipt.run.runId);
+  assert.equal(receipt.refreshSelection.observationKnown, true);
+  assert.equal(receipt.refreshSelection.observationTime, '2026-10-25T07:00:00Z');
+  const superseded = receipt.refreshSelection.superseded.find((s) => s.runId === '40085137740');
+  assert.ok(superseded, 'the earlier success should be recorded as superseded');
+});
+
+test('an unorderable candidate leaves the newest evidenced success unestablished', () => {
+  const receipt = evaluateReceipt(syntheticByPrefix('SYNTHETIC: the successful refreshes cannot be ordered, so the newest one is not established'));
+  assert.equal(receipt.refreshSelection.verdict, 'ambiguous');
+  assert.equal(receipt.refreshSelection.selected, null);
+  const cand = receipt.refreshSelection.candidates.find((c) => c.source === 'this_run');
+  assert.equal(cand.orderable, false);
+  assert.equal(cand.excluded, false);
+  assert.equal(cand.futureDated, null);
+});
+
 // --- The checker itself must stay offline and inert on import -------------
 
 test('importing the checker does not execute it', () => {
