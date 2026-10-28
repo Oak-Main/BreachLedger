@@ -1,0 +1,759 @@
+[
+  {
+    "label": "SYNTHETIC: every required stage succeeds",
+    "kind": "synthetic",
+    "note": "Fixture only. Exercises the checker's success path. A synthetic green run is never an operational success.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000001",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000001", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964, "unchanged": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:03:44Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: failed tests with green cleanup steps",
+    "kind": "synthetic",
+    "note": "Fixture only. The trap: the summary and the artifact-upload step both go green while the run failed before ingestion.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000002",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:01:20Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "failure", "tests": { "total": 430, "passed": 429, "failed": 1, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "skipped", "conclusion": "skipped" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "skipped", "conclusion": "skipped" },
+            { "name": "Build", "status": "skipped", "conclusion": "skipped" },
+            { "name": "Deploy to Pages", "status": "skipped", "conclusion": "skipped" }
+          ]
+        }
+      ],
+      "artifacts": [],
+      "retrievals": [],
+      "ingest": null,
+      "export": null,
+      "build": null,
+      "deployment": null
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: ingestion skipped while every other stage is green",
+    "kind": "synthetic",
+    "note": "Fixture only. A skipped stage is not a successful stage.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000003",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:02:10Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "skipped", "conclusion": "skipped" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000003", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:02:10Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the ingestion step is absent from the evidence",
+    "kind": "synthetic",
+    "note": "Fixture only. 'Not present' is a different thing from 'skipped' and a different thing from 'succeeded'.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000004",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:02:10Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" }
+      ],
+      "ingest": null,
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:02:10Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: dry run, no publication",
+    "kind": "synthetic",
+    "note": "Fixture only. The ingest succeeded and the data was retrieved, but a dry run writes nothing to D1 and publishes nothing. The export, build and deploy steps are skipped BY DESIGN.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000005",
+      "attempt": 1,
+      "event": "workflow_dispatch",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T09:00:04Z",
+      "completedAt": "2026-10-25T09:02:00Z",
+      "dryRun": true,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "skipped", "conclusion": "skipped" },
+            { "name": "Build", "status": "skipped", "conclusion": "skipped" },
+            { "name": "Deploy to Pages", "status": "skipped", "conclusion": "skipped" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000005", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T09:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T09:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 0 },
+      "export": null,
+      "build": null,
+      "deployment": null
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T10:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: one required source has no retrieval evidence",
+    "kind": "synthetic",
+    "note": "Fixture only. Every stage is green, but the Part 2 report was never observed. A green pipeline does not prove both sources were fetched.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000006",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000006", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:03:44Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the export step fails",
+    "kind": "synthetic",
+    "note": "Fixture only. The ingest succeeded and the build and deploy never ran. The data was refreshed but nothing was published.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000007",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "failure" },
+            { "name": "Build", "status": "skipped", "conclusion": "skipped" },
+            { "name": "Deploy to Pages", "status": "skipped", "conclusion": "skipped" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000007", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": null,
+      "build": null,
+      "deployment": null
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the build step fails",
+    "kind": "synthetic",
+    "note": "Fixture only. The build failed, so nothing was deployed even though the export succeeded.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000008",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "failure" },
+            { "name": "Deploy to Pages", "status": "skipped", "conclusion": "skipped" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000008", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": null,
+      "deployment": null
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the deploy step fails",
+    "kind": "synthetic",
+    "note": "Fixture only. The data was refreshed and the site was built, but the publication failed.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000009",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "failure" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000009", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": null
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the run head SHA is not the expected revision",
+    "kind": "synthetic",
+    "note": "Fixture only. Everything went green, but on a different revision. The receipt cannot satisfy a claim about the expected revision.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000010",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "cafebabecafebabecafebabecafebabecafebabe",
+      "checkedOutSha": "cafebabecafebabecafebabecafebabecafebabe",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR breach portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000010", "attempt": 1, "sha": "cafebabecafebabecafebabecafebabecafebabe", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:03:44Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the run is a different attempt than the one expected",
+    "kind": "synthetic",
+    "note": "Fixture only. The evidence belongs to attempt 2; the claim is about attempt 1. A re-run is not the run that was asked about.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000011",
+      "attempt": 2,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000011", "attempt": 2, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:03:44Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the checkout SHA differs from the run head SHA",
+    "kind": "synthetic",
+    "note": "Fixture only. The run reports the expected head SHA, but the code that was actually checked out was something else. A mismatched checkout cannot satisfy the receipt.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000012",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "0000000000000000000000000000000000000000",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000012", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:03:44Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the artifact belongs to a different run",
+    "kind": "synthetic",
+    "note": "Fixture only. The rejection artifact was copied in from an earlier run. It cannot stand in for this run's evidence.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000013",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "88888888888", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [
+        { "source": "hhs_ocr", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:10.500Z", "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" },
+        { "source": "hhs_part2", "view": "under_investigation", "retrieved_at": "2026-10-25T06:01:40.250Z", "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2" }
+      ],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:03:44Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  },
+  {
+    "label": "SYNTHETIC: the retrieval evidence is absent",
+    "kind": "synthetic",
+    "note": "Fixture only. Every stage is green and the site was deployed, but nothing records what was actually fetched. The receipt cannot say the sources were observed.",
+    "evidence": {
+      "repository": "Oak-Main/BreachLedger",
+      "workflowPath": ".github/workflows/ingest.yml",
+      "runId": "90000000014",
+      "attempt": 1,
+      "event": "schedule",
+      "branch": "main",
+      "headSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "checkedOutSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "startedAt": "2026-10-25T06:00:04Z",
+      "completedAt": "2026-10-25T06:03:44Z",
+      "dryRun": false,
+      "coverage": "current",
+      "jobs": [
+        {
+          "name": "ingest",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+            { "name": "Run npm test", "status": "completed", "conclusion": "success", "tests": { "total": 430, "passed": 430, "failed": 0, "skipped": 0 } },
+            { "name": "Ingest HHS OCR portal", "status": "completed", "conclusion": "success" },
+            { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+            { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+            { "name": "Export build input from D1", "status": "completed", "conclusion": "success" },
+            { "name": "Build", "status": "completed", "conclusion": "success" },
+            { "name": "Deploy to Pages", "status": "completed", "conclusion": "success" }
+          ]
+        }
+      ],
+      "artifacts": [
+        { "name": "ingest-rejects", "runId": "90000000014", "attempt": 1, "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "uploaded": true, "files": ["docs/ingest-rejects.log"] }
+      ],
+      "retrievals": [],
+      "ingest": { "parsed": 7964, "valid": 7964, "rejected": 0, "written": 7964 },
+      "export": { "breaches": 7966 },
+      "build": { "pages": 412 },
+      "deployment": { "reference": "https://breachbook.org", "completedAt": "2026-10-25T06:03:44Z" }
+    },
+    "expectations": {
+      "expectedSources": ["hhs_ocr", "hhs_part2"],
+      "expectedCoverage": "current",
+      "expectedHeadSha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "expectedAttempt": 1,
+      "asOf": "2026-10-25T07:00:00Z",
+      "cadenceHours": 24
+    }
+  }
+]

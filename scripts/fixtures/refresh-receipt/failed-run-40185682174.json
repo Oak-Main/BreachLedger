@@ -1,0 +1,71 @@
+{
+  "label": "Run 40185682174 (attempt 1) -- the recorded failure at 3f51cbc",
+  "kind": "recorded",
+  "note": "Real run, sanitized evidence only. The test step failed with 419/420 passing: the assertion compared the production stamp .251Z against a later reading of the clock, .252Z. One millisecond apart, no production defect. The credential guard passed. Ingest, export, build and deploy were skipped. The summary and the artifact-upload steps succeeded, but no artifact was uploaded.",
+  "evidence": {
+    "repository": "Oak-Main/BreachLedger",
+    "workflowPath": ".github/workflows/ingest.yml",
+    "runId": "40185682174",
+    "attempt": 1,
+    "event": "schedule",
+    "branch": "main",
+    "headSha": "3f51cbc4e7df9083cb055244335847fe9c2365c5",
+    "checkedOutSha": "3f51cbc4e7df9083cb055244335847fe9c2365c5",
+    "startedAt": "2026-10-25T10:39:38Z",
+    "completedAt": null,
+    "dryRun": false,
+    "coverage": "current",
+    "jobs": [
+      {
+        "name": "ingest",
+        "status": "completed",
+        "conclusion": "failure",
+        "steps": [
+          { "name": "Set up job", "status": "completed", "conclusion": "success" },
+          { "name": "Run actions/checkout@v4", "status": "completed", "conclusion": "success" },
+          { "name": "Set up Node.js 22", "status": "completed", "conclusion": "success" },
+          { "name": "Install dependencies", "status": "completed", "conclusion": "success" },
+          { "name": "Verify credentials are present", "status": "completed", "conclusion": "success" },
+          {
+            "name": "Run npm test",
+            "status": "completed",
+            "conclusion": "failure",
+            "tests": { "total": 420, "passed": 419, "failed": 1, "skipped": 0 },
+            "failure": {
+              "test": "stamps a retrieval time as an ISO-8601 instant",
+              "file": "packages/ingest/fetch-util.test.js",
+              "actual": "2026-10-25T10:39:38.251Z",
+              "expected": "2026-10-25T10:39:38.252Z",
+              "cause": "the assertion compared the production stamp with a second, later reading of the wall clock"
+            }
+          },
+          { "name": "Ingest HHS OCR breach portal", "status": "skipped", "conclusion": "skipped" },
+          { "name": "Publish ingest summary", "status": "completed", "conclusion": "success" },
+          { "name": "Upload rejected records for review", "status": "completed", "conclusion": "success" },
+          { "name": "Export build input from D1", "status": "skipped", "conclusion": "skipped" },
+          { "name": "Build", "status": "skipped", "conclusion": "skipped" },
+          { "name": "Deploy to Pages", "status": "skipped", "conclusion": "skipped" }
+        ]
+      }
+    ],
+    "artifacts": [],
+    "retrievals": [],
+    "ingest": null,
+    "export": null,
+    "build": null,
+    "deployment": null
+  },
+  "expectations": {
+    "expectedSources": ["hhs_ocr", "hhs_part2"],
+    "expectedCoverage": "current",
+    "expectedHeadSha": "3f51cbc4e7df9083cb055244335847fe9c2365c5",
+    "expectedAttempt": 1,
+    "asOf": "2026-10-25T12:00:00Z",
+    "cadenceHours": 24,
+    "lastSuccessful": {
+      "runId": "40085137740",
+      "attempt": null,
+      "completedAt": "2026-10-24T10:16:24.744Z"
+    }
+  }
+}
