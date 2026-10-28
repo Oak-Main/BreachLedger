@@ -89,7 +89,7 @@ const BLOCKAGE = {
 
 function classifyStep(step) {
   if (step && typeof step.stage === 'string' && STAGE_IDS.has(step.stage)) return step.stage;
-  const name = (step && step.name) || '';
+  const name = step && typeof step.name === 'string' ? step.name : '';
   for (const def of STAGE_DEFINITIONS) {
     if (def.pattern.test(name)) return def.id;
   }
@@ -129,6 +129,49 @@ function allSteps(evidence) {
 
 function isNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+// Diagnostic text must not invoke conversion methods on supplied objects.
+// Keep the original values in the structured receipt, with invalid text here.
+function formatEvidenceValue(value, missing = 'unknown') {
+  if (value == null || value === '') return missing;
+  if (typeof value === 'string' || typeof value === 'boolean' || isNumber(value)) return String(value);
+  return 'invalid';
+}
+
+function formatEvidenceList(values) {
+  return values.map((value) => formatEvidenceValue(value)).join(', ');
+}
+
+// GitHub attempts start at 1 and increment on reruns. Receipt identities use
+// numbers, with safe-integer precision required for exact binding comparisons.
+function isAttempt(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function formatAttempt(value) {
+  if (value == null) return 'unknown';
+  return isAttempt(value) ? String(value) : 'invalid';
+}
+
+function formatTimestamp(value) {
+  if (value == null || value === '') return 'unknown';
+  return typeof value === 'string' ? value : 'invalid';
+}
+
+function hasRunIdentity(value) {
+  return (typeof value === 'string' && value.trim() !== '') ||
+    (isNumber(value) && Number.isInteger(value) && value > 0);
+}
+
+function formatRunIdentity(value) {
+  if (value == null) return 'unknown';
+  return hasRunIdentity(value) ? String(value) : 'invalid';
+}
+
+function formatChecksum(value) {
+  if (value == null) return 'unknown';
+  return typeof value === 'string' && SHA256_HEX.test(value) ? value : 'invalid';
 }
 
 function parseInstant(value) {
@@ -173,22 +216,30 @@ function parseCanonicalInstant(value) {
 /**
  * Parse a reference instant (an `asOf`, or a run's completion time).
  *
- * These are expectations about a run rather than values this repository's own
- * code stamped, so they are not held to the canonical millisecond shape -- but
- * an impossible calendar date is still rejected, because "2026-02-30" parsing
- * successfully into 2026-03-01 would silently change what a receipt means.
+ * Reference instants need an explicit ISO timezone. Offset-less date-times
+ * would otherwise use the host's timezone and change provenance by machine.
+ * Milliseconds are optional, and explicit offsets remain valid even when
+ * their UTC date differs from the declared local calendar date.
  */
 function parseReferenceInstant(value) {
   if (typeof value !== 'string' || value.trim() === '') {
     return { valid: false, ms: null, reason: 'is missing' };
   }
+  const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i);
+  if (!parts) {
+    return { valid: false, ms: null, reason: 'is not an ISO-8601 instant with an explicit timezone' };
+  }
   const ms = Date.parse(value);
   if (!Number.isFinite(ms)) {
     return { valid: false, ms: null, reason: 'is not a valid instant' };
   }
-  const declared = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const declared = parts;
   if (declared) {
-    const d = new Date(ms);
+    const zone = parts[4];
+    const offsetMinutes = zone.toUpperCase() === 'Z' ? 0 :
+      (zone[0] === '+' ? 1 : -1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6)));
+    // Compare the declared calendar in its own offset, not the UTC calendar.
+    const d = new Date(ms + offsetMinutes * 60000);
     const actual = `${String(d.getUTCFullYear()).padStart(4, '0')}-` +
       `${String(d.getUTCMonth() + 1).padStart(2, '0')}-` +
       `${String(d.getUTCDate()).padStart(2, '0')}`;
@@ -204,13 +255,29 @@ function parseReferenceInstant(value) {
  *
  * A source NAME is not provenance. A row only counts as evidence when it
  * carries a timestamp this repository could have produced, a checksum of the
- * shape the ingester produces, and no binding that contradicts the run the
- * receipt is about.
+ * shape the ingester produces, no timestamp later than a known observation
+ * instant or outside known run bounds, and no binding that contradicts the
+ * run the receipt is about. An unknown start does not invent a lower bound.
  */
-function validateRetrievalRow(row, run) {
+function validateRetrievalRow(row, run, { asOfMs, startedAtMs, completedAtMs }) {
   const reasons = [];
   const instant = parseCanonicalInstant(row.retrieved_at);
+  let timing = instant.valid ? 'valid' : (row.retrieved_at == null ? 'missing' : 'invalid');
   if (!instant.valid) reasons.push(`retrieved_at ${instant.reason}`);
+  if (instant.valid && asOfMs !== null && instant.ms > asOfMs) {
+    reasons.push('retrieved_at is later than the as-of instant');
+    timing = 'future';
+  }
+  // Only recorded, parseable run bounds constrain the claimed retrieval.
+  // Unknown bounds are not replaced with guessed start or completion times.
+  if (instant.valid && startedAtMs !== null && instant.ms < startedAtMs) {
+    reasons.push('retrieved_at is before the recorded run start');
+    if (timing === 'valid') timing = 'invalid';
+  }
+  if (instant.valid && completedAtMs !== null && instant.ms > completedAtMs) {
+    reasons.push('retrieved_at is after the recorded run completion');
+    if (timing === 'valid') timing = 'invalid';
+  }
 
   const checksum = typeof row.checksum === 'string' ? row.checksum : null;
   if (checksum === null) {
@@ -219,17 +286,22 @@ function validateRetrievalRow(row, run) {
     reasons.push('checksum is not a sha256 digest');
   }
 
-  if (row.runId != null && run.runId != null && row.runId !== run.runId) {
-    reasons.push('the retrieval belongs to a different run');
+  if (row.runId != null) {
+    if (!hasRunIdentity(run.runId)) reasons.push('the retrieval run binding cannot be checked because the run identifier is not recorded');
+    else if (row.runId !== run.runId) reasons.push('the retrieval belongs to a different run');
   }
-  if (row.attempt != null && run.attempt != null && row.attempt !== run.attempt) {
-    reasons.push('the retrieval belongs to a different attempt');
+  if (row.attempt != null) {
+    if (!isAttempt(row.attempt)) reasons.push('the retrieval attempt must be a positive safe integer');
+    else if (run.attempt === null) reasons.push('the retrieval attempt binding cannot be checked because the run attempt is not recorded');
+    else if (!isAttempt(run.attempt)) reasons.push('the retrieval attempt binding cannot be checked because the run attempt must be a positive safe integer');
+    else if (row.attempt !== run.attempt) reasons.push('the retrieval belongs to a different attempt');
   }
-  if (row.sha != null && run.headSha != null && row.sha !== run.headSha) {
-    reasons.push('the retrieval was produced from a different revision');
+  if (row.sha != null) {
+    if (!run.headSha) reasons.push('the retrieval revision binding cannot be checked because the run revision is not recorded');
+    else if (row.sha !== run.headSha) reasons.push('the retrieval was produced from a different revision');
   }
 
-  return { instant, checksum, reasons, valid: reasons.length === 0 };
+  return { instant, checksum, timing, reasons, valid: reasons.length === 0 };
 }
 
 /**
@@ -254,7 +326,7 @@ function evaluateReceipt(caseData) {
     repository: evidence.repository ?? null,
     workflowPath: evidence.workflowPath ?? null,
     runId: evidence.runId ?? null,
-    attempt: isNumber(evidence.attempt) ? evidence.attempt : null,
+    attempt: evidence.attempt ?? null,
     event: evidence.event ?? null,
     branch: evidence.branch ?? null,
     headSha: evidence.headSha ?? null,
@@ -263,25 +335,33 @@ function evaluateReceipt(caseData) {
     completedAt: evidence.completedAt ?? null,
   };
   ref('evidence.runId', run.runId);
+  ref('evidence.attempt', run.attempt);
   ref('evidence.headSha', run.headSha);
   ref('evidence.checkedOutSha', run.checkedOutSha);
 
   // A receipt that describes a different revision, or a different attempt of
   // the run, cannot satisfy a claim about this revision.
   const expectedSha = expectations.expectedHeadSha || null;
-  const expectedAttempt = isNumber(expectations.expectedAttempt) ? expectations.expectedAttempt : null;
+  const expectedAttempt = expectations.expectedAttempt ?? null;
   const revisionMatches = expectedSha ? run.headSha === expectedSha : null;
   const checkoutMatches = expectedSha ? run.checkedOutSha === expectedSha : null;
-  const attemptMatches = expectedAttempt ? run.attempt === expectedAttempt : null;
+  const attemptMatches = expectedAttempt === null ? null :
+    isAttempt(expectedAttempt) && isAttempt(run.attempt) && run.attempt === expectedAttempt;
 
   if (revisionMatches === false) {
-    missingProof.push(`the run's head SHA (${run.headSha}) is not the expected revision (${expectedSha})`);
+    missingProof.push(`the run's head SHA (${formatEvidenceValue(run.headSha)}) is not the expected revision (${formatEvidenceValue(expectedSha)})`);
   }
   if (checkoutMatches === false) {
-    missingProof.push(`the checkout SHA (${run.checkedOutSha}) does not match the expected revision (${expectedSha})`);
+    missingProof.push(`the checkout SHA (${formatEvidenceValue(run.checkedOutSha)}) does not match the expected revision (${formatEvidenceValue(expectedSha)})`);
   }
-  if (attemptMatches === false) {
-    missingProof.push(`run attempt ${run.attempt} is not the expected attempt ${expectedAttempt}`);
+  if (expectedAttempt !== null && !isAttempt(expectedAttempt)) {
+    missingProof.push('the expected attempt must be a positive safe integer');
+  } else if (attemptMatches === false) {
+    if (run.attempt !== null && !isAttempt(run.attempt)) {
+      missingProof.push('the run attempt must be a positive safe integer');
+    } else {
+      missingProof.push(`run attempt ${run.attempt} is not the expected attempt ${expectedAttempt}`);
+    }
   }
 
   // --- Mode ---------------------------------------------------------------
@@ -301,7 +381,7 @@ function evaluateReceipt(caseData) {
     const step = byStage.get(def.id) || null;
     const verdict = stepVerdict(step);
     const required = requiredStages.includes(def.id);
-    if (step) ref(`jobs[].steps[${step.name}].conclusion`, step.conclusion ?? null);
+    if (step) ref(`jobs[].steps[${formatEvidenceValue(step.name)}].conclusion`, step.conclusion ?? null);
     return {
       id: def.id,
       label: def.label,
@@ -329,6 +409,20 @@ function evaluateReceipt(caseData) {
   };
   if (tests.total !== null) ref('evidence.tests', rawTests);
 
+  // The same observation instant governs provenance, source coverage and
+  // freshness. Validate it before any retrieval can count as evidence.
+  const asOf = expectations.asOf ?? null;
+  const asOfParsed = parseReferenceInstant(asOf);
+  const asOfMs = asOfParsed.valid ? asOfParsed.ms : null;
+  const observationKnown = asOfMs !== null;
+  const runStart = parseReferenceInstant(run.startedAt);
+  const runCompletion = parseReferenceInstant(run.completedAt);
+  const timeBounds = {
+    asOfMs,
+    startedAtMs: runStart.valid ? runStart.ms : null,
+    completedAtMs: runCompletion.valid ? runCompletion.ms : null,
+  };
+
   // --- Source selection ---------------------------------------------------
   const expectedSources = Array.isArray(expectations.expectedSources) ? expectations.expectedSources : [];
   const retrievals = Array.isArray(evidence.retrievals) ? evidence.retrievals : [];
@@ -340,13 +434,14 @@ function evaluateReceipt(caseData) {
   // timestamp this repository could have produced, a checksum of the shape the
   // ingester produces, and no binding that contradicts this run.
   const retrievalRows = retrievals.map((r) => {
-    const v = validateRetrievalRow(r, run);
+    const v = validateRetrievalRow(r, run, timeBounds);
     return {
       source: r.source ?? null,
       view: r.view ?? null,
       retrievedAt: r.retrieved_at ?? null,
       checksum: r.checksum ?? null,
       instant: v.instant,
+      timing: v.timing,
       valid: v.valid,
       reasons: v.reasons,
     };
@@ -369,12 +464,6 @@ function evaluateReceipt(caseData) {
   };
 
   // --- Freshness ----------------------------------------------------------
-  const asOf = expectations.asOf ?? null;
-  const asOfParsed = parseReferenceInstant(asOf);
-  const asOfMs = asOfParsed.valid ? asOfParsed.ms : null;
-  // Whether the receipt has a usable observation time at all. Every
-  // time-based comparison below is gated on this.
-  const observationKnown = asOfMs !== null;
   // An absent or non-positive cadence is not a freshness SLA. Defaulting one
   // in would invent a threshold the repository does not define, so the verdict
   // stays unknown instead.
@@ -383,12 +472,7 @@ function evaluateReceipt(caseData) {
   const cadenceHours = cadenceValid ? cadenceSupplied : null;
 
   const freshnessRows = retrievalRows.map((r) => {
-    let timing = 'invalid';
-    if (r.instant.valid) timing = 'valid';
-    else if (r.retrievedAt === null || r.retrievedAt === undefined) timing = 'missing';
-    // A retrieval stamped in the future has not happened yet. It is not
-    // "fresh" -- it is invalid evidence.
-    if (timing === 'valid' && observationKnown && r.instant.ms > asOfMs) timing = 'future';
+    const timing = r.timing;
     // The age is only ever computed against a KNOWN observation time. An
     // invalid or missing asOf must not take part in the subtraction: `null -
     // instant` is a negative number, and a negative age compares as "within
@@ -420,13 +504,13 @@ function evaluateReceipt(caseData) {
   const badTiming = freshnessRows.filter((r) => r.timing !== 'valid');
 
   if (freshnessProblems.length === 0) {
-    if (provablyStale) {
-      freshnessVerdict = 'exceeds_cadence';
-    } else if (badTiming.length) {
+    if (badTiming.length) {
       // Invalid timing is unknown, NOT stale. Claiming "exceeds_cadence" here
       // would assert a fact the evidence does not support.
       freshnessVerdict = 'unknown';
       freshnessProblems.push(`${badTiming.length} retrieval timestamp(s) are missing, malformed, impossible or in the future`);
+    } else if (provablyStale) {
+      freshnessVerdict = 'exceeds_cadence';
     } else {
       freshnessVerdict = 'within_cadence';
     }
@@ -472,9 +556,13 @@ function evaluateReceipt(caseData) {
     reference: deploymentRef.reference ?? null,
     completedAt: deploymentRef.completedAt ?? null,
   };
-  if (deployStage && deployStage.verdict === 'success' && !deployment.reference) {
+  const deploymentReferenceUsable = typeof deployment.reference === 'string' && deployment.reference.trim() !== '';
+  const deploymentReferenceProblem = deployment.reference == null || deployment.reference === ''
+    ? 'no deployment reference was recorded'
+    : 'the deployment reference is not a nonblank string';
+  if (deployStage && deployStage.verdict === 'success' && !deploymentReferenceUsable) {
     deployment.verdict = 'unknown';
-    notes.push('the deploy step succeeded but no deployment reference was recorded');
+    notes.push(`the deploy step succeeded but ${deploymentReferenceProblem}`);
   }
   if (deployStage && deployStage.verdict !== 'success') {
     deployment.reference = null;
@@ -491,6 +579,8 @@ function evaluateReceipt(caseData) {
   // Identity is verified only when the evidence names the specific deployed
   // artifact AND binds it to this run's revision.
   const identityArtifactSha = typeof deploymentRef.artifactSha === 'string' ? deploymentRef.artifactSha : null;
+  const invalidArtifactDigest = deploymentRef.artifactSha != null &&
+    (identityArtifactSha === null || !SHA256_HEX.test(identityArtifactSha));
   const identityDeploymentId = typeof deploymentRef.deploymentId === 'string' ? deploymentRef.deploymentId : null;
   const identityBoundSha = typeof deploymentRef.sha === 'string' ? deploymentRef.sha : null;
 
@@ -516,9 +606,13 @@ function evaluateReceipt(caseData) {
   if (!deployStage || deployStage.verdict !== 'success') {
     identity.verdict = 'not_published';
     identity.reason = 'the deploy stage did not succeed';
-  } else if (!deployment.reference) {
+  } else if (!deploymentReferenceUsable) {
     identity.verdict = 'unknown';
-    identity.reason = 'no deployment reference was recorded';
+    identity.reason = deploymentReferenceProblem;
+  } else if (invalidArtifactDigest) {
+    // A separate deployment id cannot make a supplied malformed digest valid.
+    identity.verdict = 'unproven';
+    identity.reason = 'the supplied artifact digest is not a sha256 digest';
   } else if (!identityArtifactSha && !identityDeploymentId) {
     identity.verdict = 'unproven';
     identity.reason = 'the deployment evidence names no deployed artifact (no artifact digest and no deployment id), so the reference cannot identify what was published';
@@ -544,20 +638,35 @@ function evaluateReceipt(caseData) {
     const row = {
       name: a.name ?? null,
       runId: a.runId ?? null,
-      attempt: isNumber(a.attempt) ? a.attempt : null,
+      attempt: a.attempt ?? null,
       sha: a.sha ?? null,
       uploaded: a.uploaded === true,
       files: Array.isArray(a.files) ? a.files : [],
       verdict: 'unknown',
       reason: null,
     };
-    if (row.runId && run.runId && row.runId !== run.runId) {
+    if (row.runId != null && !hasRunIdentity(run.runId)) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact run binding cannot be checked because the run identifier is not recorded';
+    } else if (row.runId != null && row.runId !== run.runId) {
       row.verdict = 'rejected';
       row.reason = 'the artifact belongs to a different run';
-    } else if (row.attempt !== null && run.attempt !== null && row.attempt !== run.attempt) {
+    } else if (row.attempt !== null && !isAttempt(row.attempt)) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact attempt must be a positive safe integer';
+    } else if (row.attempt !== null && run.attempt === null) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact attempt binding cannot be checked because the run attempt is not recorded';
+    } else if (row.attempt !== null && !isAttempt(run.attempt)) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact attempt binding cannot be checked because the run attempt must be a positive safe integer';
+    } else if (row.attempt !== null && row.attempt !== run.attempt) {
       row.verdict = 'rejected';
       row.reason = 'the artifact belongs to a different attempt';
-    } else if (row.sha && run.headSha && row.sha !== run.headSha) {
+    } else if (row.sha != null && !run.headSha) {
+      row.verdict = 'rejected';
+      row.reason = 'the artifact revision binding cannot be checked because the run revision is not recorded';
+    } else if (row.sha != null && row.sha !== run.headSha) {
       row.verdict = 'rejected';
       row.reason = 'the artifact was produced from a different revision';
     } else if (!row.uploaded) {
@@ -631,32 +740,35 @@ function evaluateReceipt(caseData) {
         // Every required stage succeeded. That alone is still not proof of a
         // refresh. Matching source NAMES is not enough either: the retrieval
         // evidence has to be there, it has to validate, and the run has to be
-        // bound to a revision and an attempt.
+        // bound to a run identifier, a revision and an attempt.
         stageOutcome = 'all_succeeded';
         if (expectedSources.length === 0) {
           provenanceProblems.push('no expected source list was supplied, so the retrieved source set cannot be checked');
         } else if (missingSources.length) {
-          provenanceProblems.push(`no validated retrieval evidence for required source(s): ${missingSources.join(', ')}`);
+          provenanceProblems.push(`no validated retrieval evidence for required source(s): ${formatEvidenceList(missingSources)}`);
         }
         if (invalidEvidence.length) {
           provenanceProblems.push(
             `${invalidEvidence.length} retrieval row(s) failed validation: ` +
-            invalidEvidence.map((r) => `${r.source ?? 'unknown source'} (${r.reasons.join('; ')})`).join(' | '),
+            invalidEvidence.map((r) => `${formatEvidenceValue(r.source, 'unknown source')} (${r.reasons.join('; ')})`).join(' | '),
           );
         }
-        // A retrieval stamped in the future is internally contradictory
-        // evidence: it describes a fetch that cannot have happened yet.
-        const futureRows = freshnessRows.filter((r) => r.timing === 'future');
-        if (futureRows.length) {
-          provenanceProblems.push(
-            `${futureRows.length} retrieval timestamp(s) are later than the as-of instant (${asOf}): ` +
-            futureRows.map((r) => `${r.source ?? 'unknown source'} at ${r.retrievedAt}`).join(' | '),
-          );
+        // A current success needs a usable recorded completion independently
+        // of freshness. A known contradictory run interval or future
+        // completion cannot verify success, even when every stage is green.
+        if (!runCompletion.valid) {
+          provenanceProblems.push(`the run completion instant ${runCompletion.reason}`);
+        }
+        if (runCompletion.valid && runStart.valid && runCompletion.ms < runStart.ms) {
+          provenanceProblems.push('the run completed before its recorded start');
+        }
+        if (observationKnown && runCompletion.valid && runCompletion.ms > asOfMs) {
+          provenanceProblems.push(`the run completed after the as-of instant (${asOf})`);
         }
         if (artifacts.some((a) => a.verdict === 'rejected')) {
-          provenanceProblems.push('an artifact belongs to a different run, attempt or revision');
+          provenanceProblems.push('an artifact binding cannot be validated against this run, attempt or revision');
         }
-        // A verified-success claim has to be bound to a revision and an
+        // A verified-success claim needs a run identifier, a revision and an
         // attempt. A run whose revision was never recorded cannot be quoted
         // as a verified refresh of that revision.
         const revisionBound = !!(run.headSha && run.checkedOutSha && run.headSha === run.checkedOutSha);
@@ -665,6 +777,11 @@ function evaluateReceipt(caseData) {
         }
         if (run.attempt === null) {
           provenanceProblems.push('the run attempt is not recorded');
+        } else if (!isAttempt(run.attempt)) {
+          provenanceProblems.push('the run attempt must be a positive safe integer');
+        }
+        if (!hasRunIdentity(run.runId)) {
+          provenanceProblems.push('the run identifier is not recorded');
         }
         if (provenanceProblems.length) {
           // Fail closed. "Every stage was green" is a fact about the stages.
@@ -694,7 +811,7 @@ function evaluateReceipt(caseData) {
   let publicationVerdict;
   if (dryRun) {
     publicationVerdict = 'not_published';
-  } else if (deployStage && deployStage.verdict === 'success' && deployment.reference) {
+  } else if (deployStage && deployStage.verdict === 'success' && deploymentReferenceUsable) {
     // The deploy step succeeded and a reference was recorded. Whether that
     // reference identifies the artifact THIS RUN built is a separate claim.
     publicationVerdict = identity.verdict === 'verified' ? 'published_verified' : 'published_reported';
@@ -753,7 +870,10 @@ function evaluateReceipt(caseData) {
     // `futureDated` is only knowable when the receipt has an observation
     // time. Without one it stays null -- unknown, not false.
     const futureDated = placeable && observationKnown ? orderMs > asOfMs : null;
-    const excluded = futureDated === true;
+    // Declared prior successes may omit an attempt, but a supplied malformed
+    // attempt is evidence of an invalid identity, not optional missing data.
+    const invalidAttempt = attempt != null && !isAttempt(attempt);
+    const excluded = futureDated === true || invalidAttempt;
     return {
       source,
       runId,
@@ -762,10 +882,11 @@ function evaluateReceipt(caseData) {
       orderMs,
       placeable,
       futureDated,
+      invalidAttempt,
       excluded,
-      exclusionReason: excluded
+      exclusionReason: futureDated === true
         ? 'the candidate completed after the receipt observation time, so it cannot be an already evidenced success'
-        : null,
+        : (invalidAttempt ? 'the candidate attempt must be a positive safe integer' : null),
       verified,
     };
   };
@@ -776,37 +897,45 @@ function evaluateReceipt(caseData) {
   }
   for (const d of declaredSuccesses) {
     selectionCandidates.push(buildSelectionCandidate(
-      'declared', d.runId ?? null, isNumber(d.attempt) ? d.attempt : null, d.completedAt ?? null, false,
+      'declared', d.runId ?? null, d.attempt ?? null, d.completedAt ?? null, false,
     ));
   }
 
   let selectionVerdict = 'unknown';
   let selected = null;
   const superseded = [];
-  const excludedCandidates = selectionCandidates.filter((c) => c.excluded);
+  const futureCandidates = selectionCandidates.filter((c) => c.futureDated === true);
+  const invalidAttemptCandidates = selectionCandidates.filter((c) => c.invalidAttempt);
   const selectable = selectionCandidates.filter((c) => !c.excluded);
 
   if (selectionCandidates.length === 0) {
     selectionVerdict = 'unknown';
   } else if (selectionCandidates.length === 1) {
     const only = selectionCandidates[0];
-    if (only.excluded) {
-      // A lone candidate that had not finished by the observation time is not
-      // an already evidenced success.
+    if (only.excluded || (only.source === 'this_run' && !only.verified)) {
+      // Being the only candidate does not supply missing provenance or make
+      // a future completion an already evidenced success.
       selectionVerdict = 'unknown';
     } else {
       selected = only;
       selectionVerdict = only.source === 'this_run' ? 'this_run' : 'reported';
     }
-  } else if (selectionCandidates.some((c) => !c.placeable)) {
-    // A candidate that cannot be placed on the timeline might be the newest,
-    // so the newest evidenced success is not established.
+  } else if (selectable.some((c) => !c.placeable)) {
+    // An eligible candidate without a place on the timeline might be newest.
+    // Excluded candidates remain visible but cannot participate in ordering.
     selectionVerdict = 'ambiguous';
   } else if (selectable.length === 0) {
     selectionVerdict = 'unknown';
   } else if (selectable.length === 1) {
-    selected = selectable[0];
-    selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
+    const only = selectable[0];
+    if (only.source === 'this_run' && !only.verified) {
+      // Excluding another candidate must not promote an unverified current
+      // run. Declared prior evidence retains its separate reported meaning.
+      selectionVerdict = 'unknown';
+    } else {
+      selected = only;
+      selectionVerdict = selected.source === 'this_run' ? 'this_run' : 'reported';
+    }
   } else {
     const sorted = [...selectable].sort((a, b) => b.orderMs - a.orderMs);
     if (sorted[0].orderMs === sorted[1].orderMs) {
@@ -821,12 +950,15 @@ function evaluateReceipt(caseData) {
       superseded.push(...sorted.slice(1));
     }
   }
-  if (excludedCandidates.length) {
+  if (futureCandidates.length) {
     notes.push(
-      `${excludedCandidates.length} successful-refresh candidate(s) completed after the receipt observation time` +
+      `${futureCandidates.length} successful-refresh candidate(s) completed after the receipt observation time` +
       `${observationKnown ? ` (${asOf})` : ''} and cannot be an already evidenced success` +
-      `: ${excludedCandidates.map((c) => `${c.source} run ${c.runId ?? 'unknown'} at ${c.completedAt ?? 'unknown'}`).join(' | ')}`,
+      `: ${futureCandidates.map((c) => `${c.source} run ${formatRunIdentity(c.runId)} at ${c.completedAt ?? 'unknown'}`).join(' | ')}`,
     );
+  }
+  if (invalidAttemptCandidates.length) {
+    notes.push(`${invalidAttemptCandidates.length} successful-refresh candidate(s) have an invalid supplied attempt and were excluded`);
   }
   if (selectionVerdict === 'ambiguous') {
     notes.push('the successful refreshes in this evidence could not be ordered, so the most recent one is not established');
@@ -861,7 +993,7 @@ function evaluateReceipt(caseData) {
     // needing provenance.
     provenanceComplete: stageOutcome === 'all_succeeded' && provenanceProblems.length === 0,
     problems: provenanceProblems,
-    note: 'a verified refresh requires every required stage to have succeeded AND validated retrieval evidence for every expected source AND a run bound to a revision and an attempt',
+    note: 'a verified refresh requires every required stage to have succeeded AND validated retrieval evidence for every expected source AND a run identifier bound to a revision and an attempt',
   };
 
   const kind = data.kind || 'recorded';
@@ -931,39 +1063,39 @@ function renderAssessment(receipt) {
   const lines = [];
   const r = receipt;
   const stageLabel = (s) => {
-    const status = s.status || '-';
-    const conclusion = s.conclusion || '-';
+    const status = formatEvidenceValue(s.status, '-');
+    const conclusion = formatEvidenceValue(s.conclusion, '-');
     return `${status}/${conclusion}`;
   };
 
-  lines.push(`Refresh receipt${r.label ? ` -- ${r.label}` : ''}`);
+  lines.push(`Refresh receipt${r.label ? ` -- ${formatEvidenceValue(r.label)}` : ''}`);
   if (r.evidenceKind === 'synthetic') {
     lines.push('  *** SYNTHETIC FIXTURE -- exercises the checker only, not operational evidence ***');
   } else if (r.evidenceKind === 'historical') {
     lines.push('  *** HISTORICAL COMPARISON -- not a current receipt ***');
   }
-  lines.push(`Repository:  ${r.run.repository || 'unknown'}`);
-  lines.push(`Workflow:    ${r.run.workflowPath || 'unknown'}`);
-  lines.push(`Run:         ${r.run.runId || 'unknown'} (attempt ${r.run.attempt === null ? 'unknown' : r.run.attempt})` +
-    `  event=${r.run.event || 'unknown'}  branch=${r.run.branch || 'unknown'}`);
-  lines.push(`Revision:    head=${r.run.headSha || 'unknown'}`);
-  lines.push(`             checked out=${r.run.checkedOutSha || 'unknown'}` +
+  lines.push(`Repository:  ${formatEvidenceValue(r.run.repository)}`);
+  lines.push(`Workflow:    ${formatEvidenceValue(r.run.workflowPath)}`);
+  lines.push(`Run:         ${formatRunIdentity(r.run.runId)} (attempt ${formatAttempt(r.run.attempt)})` +
+    `  event=${formatEvidenceValue(r.run.event)}  branch=${formatEvidenceValue(r.run.branch)}`);
+  lines.push(`Revision:    head=${formatEvidenceValue(r.run.headSha)}`);
+  lines.push(`             checked out=${formatEvidenceValue(r.run.checkedOutSha)}` +
     `  matches expected: ${r.revision.revisionMatches === null ? 'unknown' : r.revision.revisionMatches}` +
     `  checkout matches: ${r.revision.checkoutMatches === null ? 'unknown' : r.revision.checkoutMatches}` +
     `  attempt matches: ${r.revision.attemptMatches === null ? 'unknown' : r.revision.attemptMatches}`);
-  lines.push(`Started:     ${r.run.startedAt || 'unknown'}   Completed: ${r.run.completedAt || 'unknown'}`);
+  lines.push(`Started:     ${formatTimestamp(r.run.startedAt)}   Completed: ${formatTimestamp(r.run.completedAt)}`);
   lines.push(`Mode:        ${r.mode}`);
-  lines.push(`Sources:     expected=${r.sourceSelection.expected.join(', ') || 'none'}` +
-    `  observed=${r.sourceSelection.observed.join(', ') || 'none'}` +
-    `  missing=${r.sourceSelection.missing.join(', ') || 'none'}` +
-    `  coverage=${r.sourceSelection.coverage || 'unknown'}`);
+  lines.push(`Sources:     expected=${formatEvidenceList(r.sourceSelection.expected) || 'none'}` +
+    `  observed=${formatEvidenceList(r.sourceSelection.observed) || 'none'}` +
+    `  missing=${formatEvidenceList(r.sourceSelection.missing) || 'none'}` +
+    `  coverage=${formatEvidenceValue(r.sourceSelection.coverage)}`);
   lines.push('');
   lines.push(`VERDICT: ${r.refreshVerdict}` + (r.blockage ? ` (stopped ${r.blockage})` : '') +
     (r.verification ? `  [${r.verification.verdict}; stages=${r.verification.stageOutcome}]` : ''));
   lines.push(`PUBLICATION: ${r.publication.verdict}` +
     (r.publication.identity ? `  identity=${r.publication.identity}` : '') +
-    (r.publication.reference ? `  reference=${r.publication.reference}` : '') +
-    (r.publication.completedAt ? `  completedAt=${r.publication.completedAt}` : '') +
+    (r.publication.reference ? `  reference=${formatEvidenceValue(r.publication.reference)}` : '') +
+    (r.publication.completedAt ? `  completedAt=${formatTimestamp(r.publication.completedAt)}` : '') +
     (r.publication.note ? `  (${r.publication.note})` : ''));
   lines.push('');
 
@@ -971,7 +1103,7 @@ function renderAssessment(receipt) {
   for (const s of r.stages) {
     const req = s.required ? 'required' : 'optional';
     const reached = s.reached ? '' : '  (not reached)';
-    lines.push(`  ${s.id.padEnd(12)} ${String(s.verdict).padEnd(10)} ${stageLabel(s).padEnd(20)} ${req.padEnd(9)} ${s.name || '(absent)'}${reached}`);
+    lines.push(`  ${s.id.padEnd(12)} ${String(s.verdict).padEnd(10)} ${stageLabel(s).padEnd(20)} ${req.padEnd(9)} ${formatEvidenceValue(s.name, '(absent)')}${reached}`);
   }
   lines.push('');
 
@@ -986,15 +1118,15 @@ function renderAssessment(receipt) {
     lines.push('  (none recorded)');
   } else {
     for (const v of r.retrievals) {
-      lines.push(`  ${String(v.source).padEnd(12)} ${String(v.view || '-').padEnd(22)}` +
-        ` retrieved_at=${v.retrievedAt || 'unknown'}` +
-        `  checksum=${v.checksum || 'unknown'}` +
+      lines.push(`  ${formatEvidenceValue(v.source).padEnd(12)} ${formatEvidenceValue(v.view, '-').padEnd(22)}` +
+        ` retrieved_at=${formatTimestamp(v.retrievedAt)}` +
+        `  checksum=${formatChecksum(v.checksum)}` +
         `  age=${v.ageHours === null ? 'unknown' : v.ageHours + 'h'}` +
         `  timing=${v.timing || 'unknown'}` +
         `  evidence=${v.valid === true ? 'validated' : 'INVALID: ' + (v.reasons || []).join('; ')}`);
     }
   }
-  lines.push(`  freshness verdict: ${r.freshness.verdict} (as of ${r.freshness.asOf || 'unknown'}, cadence ${r.freshness.cadenceHours === null ? 'unknown' : r.freshness.cadenceHours + 'h'})`);
+  lines.push(`  freshness verdict: ${r.freshness.verdict} (as of ${formatTimestamp(r.freshness.asOf)}, cadence ${r.freshness.cadenceHours === null ? 'unknown' : r.freshness.cadenceHours + 'h'})`);
   for (const p of r.freshness.problems || []) lines.push(`    - ${p}`);
   if (r.freshness.sourcePublication && r.freshness.sourcePublication.established === false) {
     lines.push(`    - source publication: not established -- ${r.freshness.sourcePublication.note}`);
@@ -1009,8 +1141,8 @@ function renderAssessment(receipt) {
   lines.push(`  rejected records: ${r.rejectedRecords.known ? r.rejectedRecords.value : 'unknown'}` +
     (r.rejectedRecords.reason ? `  (${r.rejectedRecords.reason})` : ''));
   lines.push(`  deployment: verdict=${r.deployment.verdict}` +
-    `  reference=${r.deployment.reference || 'none'}` +
-    `  completedAt=${r.deployment.completedAt || 'unknown'}` +
+    `  reference=${formatEvidenceValue(r.deployment.reference, 'none')}` +
+    `  completedAt=${formatTimestamp(r.deployment.completedAt)}` +
     (r.deployment.identity ? `  identity=${r.deployment.identity.verdict}` : '') +
     (r.deployment.identity && r.deployment.identity.reason ? `  (${r.deployment.identity.reason})` : ''));
   lines.push('');
@@ -1018,12 +1150,12 @@ function renderAssessment(receipt) {
   if (r.refreshSelection) {
     lines.push('Refresh selection');
     lines.push(`  verdict=${r.refreshSelection.verdict}` +
-      `  observation=${r.refreshSelection.observationTime || 'unknown'}` +
+      `  observation=${formatTimestamp(r.refreshSelection.observationTime)}` +
       `  observationKnown=${r.refreshSelection.observationKnown}`);
     for (const c of r.refreshSelection.candidates) {
-      lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${c.runId ?? 'unknown'}` +
-        `  attempt=${c.attempt === null ? 'unknown' : c.attempt}` +
-        `  completedAt=${c.completedAt || 'unknown'}` +
+      lines.push(`  candidate: ${String(c.source).padEnd(9)} run=${formatRunIdentity(c.runId)}` +
+        `  attempt=${formatAttempt(c.attempt)}` +
+        `  completedAt=${formatTimestamp(c.completedAt)}` +
         `  orderable=${c.orderable}` +
         `  futureDated=${c.futureDated === null ? 'unknown' : c.futureDated}` +
         `  verified=${c.verified}` +
@@ -1031,7 +1163,7 @@ function renderAssessment(receipt) {
     }
     if (r.refreshSelection.superseded.length) {
       for (const s of r.refreshSelection.superseded) {
-        lines.push(`  superseded: ${s.source} run=${s.runId ?? 'unknown'} completedAt=${s.completedAt || 'unknown'}`);
+        lines.push(`  superseded: ${s.source} run=${formatRunIdentity(s.runId)} completedAt=${formatTimestamp(s.completedAt)}`);
       }
     }
     lines.push(`  ${r.refreshSelection.note}`);
@@ -1052,7 +1184,7 @@ function renderAssessment(receipt) {
     lines.push('  (none recorded)');
   } else {
     for (const a of r.artifacts) {
-      lines.push(`  ${String(a.name || '-').padEnd(20)} ${String(a.verdict).padEnd(10)} ${a.reason || ''}`);
+      lines.push(`  ${formatEvidenceValue(a.name, '-').padEnd(20)} ${String(a.verdict).padEnd(10)} ${a.reason || ''}`);
     }
   }
   lines.push('');
@@ -1069,11 +1201,11 @@ function renderAssessment(receipt) {
     for (const n of r.notes) lines.push(`  - ${n}`);
   }
   lines.push('');
-  lines.push(`Last attempt: run ${r.run.runId} (attempt ${r.run.attempt === null ? 'unknown' : r.run.attempt})` +
+  lines.push(`Last attempt: run ${formatRunIdentity(r.run.runId)} (attempt ${formatAttempt(r.run.attempt)})` +
     `  verdict=${r.refreshVerdict}  publication=${r.publication.verdict}` +
-    `  startedAt=${r.run.startedAt || 'unknown'}`);
-  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${r.lastSuccessfulRefresh.runId} (attempt ${r.lastSuccessfulRefresh.attempt === null ? 'unknown' : r.lastSuccessfulRefresh.attempt})`}` +
-    (r.lastSuccessfulRefresh.completedAt ? `  completedAt=${r.lastSuccessfulRefresh.completedAt}` : '') +
+    `  startedAt=${formatTimestamp(r.run.startedAt)}`);
+  lines.push(`Last successful refresh: ${r.lastSuccessfulRefresh.verdict === 'unknown' ? 'unknown' : `run ${formatRunIdentity(r.lastSuccessfulRefresh.runId)} (attempt ${formatAttempt(r.lastSuccessfulRefresh.attempt)})`}` +
+    (r.lastSuccessfulRefresh.completedAt ? `  completedAt=${formatTimestamp(r.lastSuccessfulRefresh.completedAt)}` : '') +
     (r.lastSuccessfulRefresh.note ? `  -- ${r.lastSuccessfulRefresh.note}` : ''));
   lines.push('This receipt evaluates LOCAL SAVED EVIDENCE ONLY. It is not a live observation of any provider,');
   lines.push('of D1, or of the deployed site, and it is not by itself operational acceptance.');

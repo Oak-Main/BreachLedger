@@ -231,15 +231,15 @@ test('the last successful refresh is kept separate from the last attempt', () =>
   assert.equal(blind.lastSuccessfulRefresh.runId, null);
   assert.equal(blind.lastSuccessfulRefresh.completedAt, null);
 
-  // The historical run's stages all succeeded, so it is the most recent
-  // successful refresh this evidence covers -- even though it is NOT a
-  // verified refresh, because its revision was never recorded. Those are two
-  // separate questions and the receipt keeps them apart.
+  // Successful stages without a recorded revision do not establish a
+  // successful refresh to select. Keep the historical evidence visible.
   const ok = evaluateReceipt(HISTORICAL_RUN);
   assert.equal(ok.verification.stageOutcome, 'all_succeeded');
   assert.equal(ok.refreshVerdict, 'unknown');
-  assert.equal(ok.lastSuccessfulRefresh.verdict, 'this_run');
-  assert.equal(ok.lastSuccessfulRefresh.runId, '40085137740');
+  assert.equal(ok.lastSuccessfulRefresh.verdict, 'unknown');
+  assert.equal(ok.lastSuccessfulRefresh.runId, null);
+  assert.equal(ok.refreshSelection.candidates[0].runId, '40085137740');
+  assert.equal(ok.refreshSelection.candidates[0].verified, false);
 });
 
 test('the readable assessment shows the last attempt and the last successful refresh as two different things', () => {
@@ -821,6 +821,933 @@ test('an unorderable candidate leaves the newest evidenced success unestablished
   assert.equal(cand.orderable, false);
   assert.equal(cand.excluded, false);
   assert.equal(cand.futureDated, null);
+});
+
+// --- Post-merge provenance and selection regressions ----------------------
+
+function greenCase() {
+  return JSON.parse(JSON.stringify(syntheticByPrefix('SYNTHETIC: every required stage succeeds')));
+}
+
+test('a successful refresh requires a recorded nonempty run identity even without bound rows', () => {
+  for (const runId of [undefined, null, '', '   ']) {
+    const c = greenCase();
+    c.evidence.runId = runId;
+    c.evidence.artifacts = [];
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(runId));
+    assert.ok(r.verification.problems.some((p) => /run identifier is not recorded/.test(p)));
+    assert.equal(r.lastSuccessfulRefresh.runId, null);
+  }
+});
+
+const BINDINGS = [
+  ['runId', 'runId', 'run'],
+  ['attempt', 'attempt', 'attempt'],
+  ['sha', 'headSha', 'revision'],
+];
+
+test('bound retrieval rows cannot validate when the matching run identity is absent', () => {
+  for (const [rowField, runField, label] of BINDINGS) {
+    const c = greenCase();
+    for (const row of c.evidence.retrievals) row[rowField] = c.evidence[runField];
+    delete c.evidence[runField];
+    delete c.expectations.expectedHeadSha;
+    delete c.expectations.expectedAttempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', label);
+    assert.deepEqual(r.sourceSelection.verified, [], label);
+    for (const row of r.retrievals) {
+      assert.equal(row.valid, false, label);
+      assert.ok(row.reasons.some((reason) => /not recorded/.test(reason)), label);
+    }
+  }
+});
+
+test('bound review artifacts are rejected when the matching run identity is absent', () => {
+  for (const [, runField, label] of BINDINGS) {
+    const c = greenCase();
+    delete c.evidence[runField];
+    delete c.expectations.expectedHeadSha;
+    delete c.expectations.expectedAttempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.artifacts[0].verdict, 'rejected', label);
+    assert.match(r.artifacts[0].reason, /not recorded/, label);
+    assert.equal(r.refreshVerdict, 'unknown', label);
+  }
+});
+
+test('matching retrieval and artifact bindings still establish this run', () => {
+  const c = greenCase();
+  for (const row of c.evidence.retrievals) {
+    row.runId = c.evidence.runId;
+    row.attempt = c.evidence.attempt;
+    row.sha = c.evidence.headSha;
+  }
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshVerdict, 'success');
+  assert.ok(r.retrievals.every((row) => row.valid));
+  assert.equal(r.artifacts[0].verdict, 'present');
+  assert.equal(r.lastSuccessfulRefresh.verdict, 'this_run');
+});
+
+test('retrieval and artifact bindings from another attempt cannot stand in for this attempt', () => {
+  const c = greenCase();
+  for (const row of c.evidence.retrievals) row.attempt = 2;
+  c.evidence.artifacts[0].attempt = 2;
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshVerdict, 'unknown');
+  assert.deepEqual(r.sourceSelection.verified, []);
+  assert.ok(r.retrievals.every((row) => !row.valid && row.reasons.some((reason) => /different attempt/.test(reason))));
+  assert.equal(r.artifacts[0].verdict, 'rejected');
+  assert.match(r.artifacts[0].reason, /different attempt/);
+  assert.equal(r.lastSuccessfulRefresh.runId, null);
+});
+
+// GitHub attempts start at 1 and increment per rerun. Receipt evidence uses
+// numeric attempts; context/environment strings must not be coerced here.
+const INVALID_ATTEMPTS = ['1', '2', '', ' ', {}, [], true, false,
+  NaN, Infinity, -Infinity, 0, -0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1];
+
+test('absent and null optional attempt bindings remain optional', () => {
+  for (const attempt of [undefined, null]) {
+    const c = greenCase();
+    for (const row of c.evidence.retrievals) row.attempt = attempt;
+    c.evidence.artifacts[0].attempt = attempt;
+    c.expectations.expectedAttempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.artifacts[0].verdict, 'present');
+    assert.equal(r.artifacts[0].attempt, null);
+    assert.ok(r.retrievals.every((row) => row.valid));
+    assert.equal(r.revision.attemptMatches, null);
+  }
+});
+
+test('matching positive safely represented numeric attempts retain success', () => {
+  for (const attempt of [1, 2, Number.MAX_SAFE_INTEGER]) {
+    const c = greenCase();
+    c.evidence.attempt = attempt;
+    c.expectations.expectedAttempt = attempt;
+    c.evidence.artifacts[0].attempt = attempt;
+    for (const row of c.evidence.retrievals) row.attempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success', String(attempt));
+    assert.equal(r.revision.attemptMatches, true);
+    assert.equal(r.artifacts[0].verdict, 'present');
+    assert.ok(r.retrievals.every((row) => row.valid));
+  }
+});
+
+test('present malformed artifact attempts are rejected without erasing their supplied value', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.evidence.artifacts[0].attempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.equal(r.artifacts[0].verdict, 'rejected');
+    assert.match(r.artifacts[0].reason, /positive safe integer/);
+    assert.ok(Object.is(r.artifacts[0].attempt, attempt), 'the invalid binding must not become null');
+    assert.equal(r.lastSuccessfulRefresh.runId, null);
+  }
+});
+
+test('present malformed retrieval attempts are invalid evidence rather than optional bindings', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    for (const row of c.evidence.retrievals) row.attempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.deepEqual(r.sourceSelection.verified, []);
+    assert.ok(r.retrievals.every((row) => !row.valid && row.reasons.some((reason) => /positive safe integer/.test(reason))));
+  }
+});
+
+test('a run needs a valid numeric attempt and retains malformed supplied identity for diagnosis', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.evidence.attempt = attempt;
+    c.expectations.expectedAttempt = null;
+    c.evidence.artifacts = [];
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.ok(Object.is(r.run.attempt, attempt), 'the run attempt must not be silently erased');
+    assert.ok(r.verification.problems.some((reason) => /positive safe integer/.test(reason)));
+    assert.equal(r.lastSuccessfulRefresh.runId, null);
+  }
+});
+
+test('a malformed expected attempt cannot silently disable the expected-attempt constraint', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.expectations.expectedAttempt = attempt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', String(attempt));
+    assert.equal(r.revision.attemptMatches, false);
+    assert.ok(r.missingProof.some((reason) => /expected attempt must be a positive safe integer/.test(reason)));
+  }
+});
+
+test('declared prior successes with absent, null or valid numeric attempts remain reported', () => {
+  for (const attempt of [undefined, null, 1, 2, Number.MAX_SAFE_INTEGER]) {
+    const c = greenCase();
+    c.evidence.completedAt = '2026-10-26T00:00:00Z';
+    c.expectations.lastSuccessful = { runId: 'prior', attempt, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.lastSuccessfulRefresh.verdict, 'reported');
+    assert.equal(r.lastSuccessfulRefresh.attempt, attempt ?? null);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.verified, false);
+    assert.equal(prior.excluded, false);
+  }
+});
+
+test('a malformed declared attempt is retained and excluded without being mislabeled as a future completion', () => {
+  for (const attempt of INVALID_ATTEMPTS) {
+    const c = greenCase();
+    c.evidence.completedAt = '2026-10-26T00:00:00Z';
+    c.expectations.lastSuccessful = { runId: 'prior', attempt, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.lastSuccessfulRefresh.verdict, 'unknown', String(attempt));
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.ok(Object.is(prior.attempt, attempt));
+    assert.equal(prior.verified, false);
+    assert.equal(prior.futureDated, false);
+    assert.equal(prior.excluded, true);
+    assert.match(prior.reason, /positive safe integer/);
+    assert.ok(r.notes.some((note) => /invalid supplied attempt/.test(note)));
+    const futureNote = r.notes.find((note) => /completed after the receipt observation time/.test(note));
+    assert.ok(futureNote);
+    assert.ok(!futureNote.includes('prior'), 'invalid declared attempt must not be called a future completion');
+  }
+});
+
+test('an excluded prior with unknown completion cannot block a verified current selection', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: 'bad-prior', attempt: '2', completedAt };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    assert.equal(r.refreshSelection.selected.runId, c.evidence.runId);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, true);
+    assert.equal(prior.orderable, false);
+    assert.match(prior.reason, /positive safe integer/);
+    assert.ok(!r.refreshSelection.superseded.some((candidate) => candidate.runId === 'bad-prior'));
+  }
+});
+
+test('an excluded current run with unknown completion cannot block a legitimate reported prior', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.evidence.attempt = '1';
+    c.evidence.completedAt = completedAt;
+    c.expectations.expectedAttempt = null;
+    c.expectations.lastSuccessful = { runId: 'prior', attempt: 1, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.refreshSelection.verdict, 'reported');
+    assert.equal(r.lastSuccessfulRefresh.runId, 'prior');
+    const current = r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run');
+    assert.equal(current.excluded, true);
+    assert.equal(current.orderable, false);
+    assert.match(current.reason, /positive safe integer/);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, false);
+    assert.equal(prior.verified, false);
+  }
+});
+
+test('an eligible prior with unknown completion still prevents an invented newest selection', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: 'prior', attempt: 1, completedAt };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshSelection.verdict, 'ambiguous');
+    assert.equal(r.refreshSelection.selected, null);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, false);
+    assert.equal(prior.orderable, false);
+  }
+});
+
+const NONCOERCIBLE_ATTEMPTS = [{ toString: null }, { toString: null, valueOf: null },
+  [{ toString: null }], Object.create(null), ...INVALID_ATTEMPTS];
+
+test('malformed run attempts produce usable receipts and assessments without coercing objects', () => {
+  for (const attempt of NONCOERCIBLE_ATTEMPTS) {
+    for (const expectedAttempt of [1, null]) {
+      const c = greenCase();
+      c.evidence.attempt = attempt;
+      c.expectations.expectedAttempt = expectedAttempt;
+      let r;
+      assert.doesNotThrow(() => { r = evaluateReceipt(c); });
+      assert.equal(r.refreshVerdict, 'unknown');
+      assert.ok(Object.is(r.run.attempt, attempt), 'retain the original malformed evidence');
+      assert.ok(r.missingProof.some((reason) => /positive safe integer/.test(reason)));
+      let text;
+      assert.doesNotThrow(() => { text = renderAssessment(r); });
+      assert.match(text, /attempt invalid/);
+      assert.match(text, /VERDICT: unknown/);
+    }
+  }
+});
+
+test('readable assessments mark retained invalid prior attempts without coercing their values', () => {
+  for (const attempt of NONCOERCIBLE_ATTEMPTS) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: 'bad-prior', attempt, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, true);
+    assert.ok(Object.is(prior.attempt, attempt));
+    let text;
+    assert.doesNotThrow(() => { text = renderAssessment(r); });
+    assert.match(text, /attempt=invalid/);
+    assert.match(text, /candidate attempt must be a positive safe integer/);
+  }
+});
+
+test('a stale retrieval cannot mask another required source with invalid timing', () => {
+  for (const invalid of [undefined, 'not-a-date', '2026-02-30T00:00:00.000Z', '2026-10-26T06:00:00.000Z']) {
+    const c = greenCase();
+    c.expectations.cadenceHours = 0.5;
+    c.evidence.retrievals[1].retrieved_at = invalid;
+    const r = evaluateReceipt(c);
+    assert.equal(r.freshness.verdict, 'unknown', String(invalid));
+    assert.equal(r.freshness.bySource[0].withinOneCadence, false);
+    assert.equal(r.freshness.bySource[1].ageMs, null);
+    assert.equal(r.freshness.bySource[1].withinOneCadence, null);
+    assert.ok(r.freshness.problems.some((p) => /timestamp/.test(p)));
+  }
+});
+
+test('valid stale-only and valid recent timing retain their distinct verdicts', () => {
+  const c = greenCase();
+  assert.equal(evaluateReceipt(c).freshness.verdict, 'within_cadence');
+  c.expectations.asOf = '2026-10-26T07:00:00Z';
+  const r = evaluateReceipt(c);
+  assert.equal(r.freshness.verdict, 'exceeds_cadence');
+  assert.deepEqual(r.freshness.problems, []);
+});
+
+test('malformed supplied artifact digests never verify publication, even with a deployment ID', () => {
+  for (const digest of ['x', '', 'a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64), 'A'.repeat(64), 123, {}]) {
+    for (const deploymentId of [undefined, 'named-deployment']) {
+      const c = greenCase();
+      c.evidence.deployment.artifactSha = digest;
+      c.evidence.deployment.deploymentId = deploymentId;
+      c.evidence.deployment.sha = c.evidence.headSha;
+      const r = evaluateReceipt(c);
+      assert.equal(r.publication.verdict, 'published_reported', JSON.stringify(digest));
+      assert.equal(r.publication.identity, 'unproven');
+      assert.match(r.deployment.identity.reason, /artifact digest is not a sha256 digest/);
+    }
+  }
+});
+
+test('a valid artifact digest or a deployment ID with no supplied digest can verify publication', () => {
+  for (const identity of [{ artifactSha: 'a'.repeat(64) }, { deploymentId: 'named-deployment' }]) {
+    const c = greenCase();
+    Object.assign(c.evidence.deployment, identity, { sha: c.evidence.headSha });
+    const r = evaluateReceipt(c);
+    assert.equal(r.publication.verdict, 'published_verified');
+    assert.equal(r.publication.identity, 'verified');
+  }
+});
+
+test('an unverified current singleton is retained as evidence but never selected', () => {
+  for (const flaw of ['revision', 'checksum']) {
+    const c = greenCase();
+    if (flaw === 'revision') {
+      delete c.evidence.headSha;
+      delete c.evidence.checkedOutSha;
+      delete c.expectations.expectedHeadSha;
+    } else {
+      c.evidence.retrievals[0].checksum = 'invalid';
+    }
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', flaw);
+    assert.equal(r.refreshSelection.verdict, 'unknown', flaw);
+    assert.equal(r.refreshSelection.selected, null, flaw);
+    assert.equal(r.lastSuccessfulRefresh.runId, null, flaw);
+    assert.equal(r.refreshSelection.candidates.length, 1);
+    assert.equal(r.refreshSelection.candidates[0].verified, false);
+    assert.equal(r.refreshSelection.candidates[0].runId, c.evidence.runId);
+    assert.match(renderAssessment(r), /Last successful refresh: unknown/);
+  }
+});
+
+test('excluding a future prior candidate cannot promote an unverified current singleton', () => {
+  const c = greenCase();
+  c.evidence.retrievals[0].checksum = 'invalid';
+  c.expectations.lastSuccessful = { runId: 'prior', completedAt: '2026-10-26T00:00:00Z' };
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshSelection.verdict, 'unknown');
+  assert.equal(r.refreshSelection.selected, null);
+  assert.equal(r.lastSuccessfulRefresh.runId, null);
+  const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+  assert.equal(prior.excluded, true);
+  assert.equal(prior.futureDated, true);
+  assert.match(prior.reason, /after the receipt observation time/);
+  assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run').verified, false);
+});
+
+test('a legitimate declared prior retains reported semantics when the current run is excluded', () => {
+  const c = greenCase();
+  c.evidence.completedAt = '2026-10-26T00:00:00Z';
+  c.expectations.lastSuccessful = { runId: 'prior', completedAt: '2026-10-24T00:00:00Z' };
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshSelection.verdict, 'reported');
+  assert.equal(r.lastSuccessfulRefresh.runId, 'prior');
+  assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').verified, false);
+  assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run').excluded, true);
+});
+
+// --- Observation-time provenance stays consistent across receipt fields ---
+
+test('a future-completed run is unverified as well as excluded from selection', () => {
+  for (const completedAt of ['2026-10-25T07:00:00.001Z', '2026-10-26T07:00:00Z']) {
+    for (const priorAttempt of [undefined, null, 1]) {
+      const c = greenCase();
+      c.evidence.completedAt = completedAt;
+      c.expectations.lastSuccessful = { runId: 'prior', attempt: priorAttempt, completedAt: '2026-10-24T06:00:00Z' };
+      const r = evaluateReceipt(c);
+      assert.equal(r.verification.stageOutcome, 'all_succeeded');
+      assert.equal(r.refreshVerdict, 'unknown');
+      assert.equal(r.verification.verdict, 'unverified');
+      assert.equal(r.verification.provenanceComplete, false);
+      assert.ok(r.verification.problems.some((p) => /run completed after the as-of instant/.test(p)));
+      const current = r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run');
+      assert.equal(current.completedAt, completedAt);
+      assert.equal(current.futureDated, true);
+      assert.equal(current.excluded, true);
+      assert.equal(current.verified, false);
+      assert.equal(r.lastSuccessfulRefresh.verdict, 'reported');
+      assert.equal(r.lastSuccessfulRefresh.runId, 'prior');
+      assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').verified, false);
+      assert.match(renderAssessment(r), /verdict=unknown/);
+    }
+  }
+});
+
+test('a future-completed singleton retains evidence without a verified success claim', () => {
+  const c = greenCase();
+  c.evidence.completedAt = '2026-10-25T08:00:00Z';
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshVerdict, 'unknown');
+  assert.equal(r.verification.provenanceComplete, false);
+  assert.equal(r.refreshSelection.verdict, 'unknown');
+  assert.equal(r.refreshSelection.selected, null);
+  assert.equal(r.refreshSelection.candidates[0].verified, false);
+  assert.equal(r.refreshSelection.candidates[0].excluded, true);
+  assert.ok(r.missingProof.some((p) => /run completed after the as-of instant/.test(p)));
+});
+
+test('run completion at or before the observation time retains verified success', () => {
+  for (const completedAt of ['2026-10-25T06:59:59.999Z', '2026-10-25T07:00:00.000Z']) {
+    const c = greenCase();
+    c.evidence.completedAt = completedAt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.verification.provenanceComplete, true);
+    assert.deepEqual(r.verification.problems, []);
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    assert.equal(r.refreshSelection.candidates[0].verified, true);
+    assert.equal(r.refreshSelection.candidates[0].excluded, false);
+  }
+});
+
+test('a future retrieval cannot count as validated source coverage', () => {
+  for (const retrievedAt of ['2026-10-25T07:00:00.001Z', '2026-10-25T09:00:00.000Z']) {
+    const c = greenCase();
+    c.evidence.retrievals[0].retrieved_at = retrievedAt;
+    const r = evaluateReceipt(c);
+    const row = r.retrievals[0];
+    assert.equal(row.retrievedAt, retrievedAt);
+    assert.equal(row.valid, false);
+    assert.equal(row.timing, 'future');
+    assert.ok(row.reasons.some((p) => /later than the as-of instant/.test(p)));
+    assert.equal(row.ageMs, null);
+    assert.equal(row.withinOneCadence, null);
+    assert.deepEqual(r.sourceSelection.observed, ['hhs_ocr', 'hhs_part2']);
+    assert.deepEqual(r.sourceSelection.verified, ['hhs_part2']);
+    assert.deepEqual(r.sourceSelection.missing, ['hhs_ocr']);
+    assert.deepEqual(r.sourceSelection.unverified, ['hhs_ocr']);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.freshness.verdict, 'unknown');
+    assert.match(renderAssessment(r), /hhs_ocr[^\n]*timing=future[^\n]*evidence=INVALID/);
+  }
+});
+
+test('retrievals at or before the observation time remain valid coverage', () => {
+  for (const retrievedAt of ['2026-10-25T06:59:59.999Z', '2026-10-25T07:00:00.000Z']) {
+    const c = greenCase();
+    c.evidence.completedAt = c.expectations.asOf;
+    for (const row of c.evidence.retrievals) row.retrieved_at = retrievedAt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.freshness.verdict, 'within_cadence');
+    assert.deepEqual(r.sourceSelection.verified, ['hhs_ocr', 'hhs_part2']);
+    assert.deepEqual(r.sourceSelection.missing, []);
+    assert.ok(r.retrievals.every((row) => row.valid && row.timing === 'valid' && row.ageMs >= 0));
+  }
+});
+
+test('a valid duplicate covers a source without validating its future row', () => {
+  const c = greenCase();
+  c.evidence.retrievals.push({ ...c.evidence.retrievals[0], retrieved_at: '2026-10-25T07:00:00.001Z' });
+  const r = evaluateReceipt(c);
+  assert.equal(r.retrievals[0].valid, true);
+  assert.equal(r.retrievals[2].valid, false);
+  assert.deepEqual(r.sourceSelection.verified, ['hhs_ocr', 'hhs_part2']);
+  assert.equal(r.refreshVerdict, 'unknown');
+  assert.equal(r.freshness.verdict, 'unknown');
+  assert.equal(r.verification.provenanceComplete, false);
+});
+
+test('future retrieval validation preserves a failed stage verdict', () => {
+  const c = greenCase();
+  c.evidence.retrievals[0].retrieved_at = '2026-10-25T07:00:00.001Z';
+  c.evidence.jobs[0].steps.find((step) => step.name === 'Run npm test').conclusion = 'failure';
+  const r = evaluateReceipt(c);
+  assert.equal(r.retrievals[0].valid, false);
+  assert.deepEqual(r.sourceSelection.verified, ['hhs_part2']);
+  assert.equal(r.refreshVerdict, 'failed');
+  assert.equal(r.failingStage, 'tests');
+  assert.equal(r.verification.verdict, 'not_applicable');
+});
+
+// --- Recorded run bounds constrain this run's retrieval evidence ----------
+
+test('a recorded completion before the recorded start is inconsistent provenance', () => {
+  for (const [completedAt, valid] of [
+    ['2026-10-25T06:01:59.999Z', false],
+    ['2026-10-25T06:02:00.000Z', true],
+    ['2026-10-25T06:02:00.001Z', true],
+  ]) {
+    for (const asOf of ['2026-10-25T07:00:00Z', undefined, 'invalid-as-of']) {
+      const c = greenCase();
+      c.evidence.startedAt = '2026-10-25T06:02:00.000Z';
+      c.evidence.completedAt = completedAt;
+      c.expectations.asOf = asOf;
+      for (const row of c.evidence.retrievals) row.retrieved_at = c.evidence.startedAt;
+      const r = evaluateReceipt(c);
+      assert.equal(r.refreshVerdict, valid ? 'success' : 'unknown');
+      assert.equal(r.verification.provenanceComplete, valid);
+      assert.equal(r.refreshSelection.candidates[0].verified, valid);
+      if (!valid) assert.ok(r.verification.problems.some((p) => /completed before.*start/.test(p)));
+    }
+  }
+});
+
+test('retrievals outside known run bounds cannot count as this run evidence', () => {
+  const boundaries = [
+    ['2026-10-25T05:59:59.999Z', false, /before.*start/],
+    ['2026-10-25T06:00:00.000Z', true],
+    ['2026-10-25T06:00:00.001Z', true],
+    ['2026-10-25T06:03:43.999Z', true],
+    ['2026-10-25T06:03:44.000Z', true],
+    ['2026-10-25T06:03:44.001Z', false, /after.*completion/],
+  ];
+  for (const [retrievedAt, valid, reason] of boundaries) {
+    for (const asOf of ['2026-10-25T07:00:00Z', undefined, 'invalid-as-of']) {
+      const c = greenCase();
+      c.evidence.startedAt = '2026-10-25T06:00:00.000Z';
+      c.evidence.retrievals[0].retrieved_at = retrievedAt;
+      c.expectations.asOf = asOf;
+      const r = evaluateReceipt(c);
+      assert.equal(r.retrievals[0].valid, valid, retrievedAt);
+      assert.equal(r.refreshVerdict, valid ? 'success' : 'unknown');
+      assert.equal(r.sourceSelection.verified.includes('hhs_ocr'), valid);
+      if (!valid) {
+        assert.equal(r.retrievals[0].timing, 'invalid');
+        assert.ok(r.retrievals[0].reasons.some((p) => reason.test(p)));
+        assert.equal(r.retrievals[0].ageMs, null);
+        assert.equal(r.freshness.verdict, 'unknown');
+      }
+    }
+  }
+});
+
+test('an unknown start does not invent a lower retrieval bound or a new required field', () => {
+  for (const startedAt of [undefined, null, '', 'not-a-date', '2026-02-30T00:00:00Z', { toString: null }]) {
+    const c = greenCase();
+    c.evidence.startedAt = startedAt;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.ok(r.retrievals.every((row) => row.valid));
+    assert.doesNotThrow(() => renderAssessment(r));
+  }
+});
+
+test('inconsistent run timing never promotes a singleton or a competing current candidate', () => {
+  for (const prior of [undefined, { runId: 'prior', completedAt: '2026-10-24T00:00:00Z' }]) {
+    const c = greenCase();
+    c.evidence.completedAt = '2026-10-25T05:59:59.999Z';
+    if (prior) c.expectations.lastSuccessful = prior;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run').verified, false);
+    assert.equal(r.refreshSelection.selected, null);
+    assert.equal(r.refreshSelection.verdict, prior ? 'ambiguous' : 'unknown');
+    if (prior) assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').verified, false);
+  }
+});
+
+// --- Completion evidence is required independently of freshness ----------
+
+test('missing or malformed run completion cannot verify a successful refresh', () => {
+  const completions = [undefined, null, '', '   ', 'not-a-date', '2026-02-30T00:00:00Z', 123, true, false, [], {}, { toString: null }];
+  for (let i = 0; i < completions.length; i++) {
+    for (const asOf of ['2026-10-25T07:00:00Z', undefined, 'invalid-as-of']) {
+      const c = greenCase();
+      c.evidence.completedAt = completions[i];
+      c.expectations.asOf = asOf;
+      const r = evaluateReceipt(c);
+      assert.equal(r.verification.stageOutcome, 'all_succeeded', `completion case ${i}`);
+      assert.equal(r.refreshVerdict, 'unknown', `completion case ${i}`);
+      assert.equal(r.verification.verdict, 'unverified');
+      assert.equal(r.verification.provenanceComplete, false);
+      assert.ok(r.verification.problems.some((p) => /run completion instant/.test(p)));
+      assert.ok(r.missingProof.some((p) => /run completion instant/.test(p)));
+      assert.equal(r.refreshSelection.candidates[0].verified, false);
+      assert.equal(r.refreshSelection.candidates[0].orderable, false);
+      assert.equal(r.refreshSelection.selected, null);
+      assert.equal(r.lastSuccessfulRefresh.verdict, 'unknown');
+      assert.deepEqual(r.run.completedAt, completions[i] ?? null);
+      assert.doesNotThrow(() => renderAssessment(r));
+    }
+  }
+});
+
+test('valid run completion preserves success even when freshness observation is unknown', () => {
+  for (const completedAt of ['2026-10-25T06:03:44Z', '2026-10-25T06:03:44.000Z', '2026-10-25T06:03:44+00:00']) {
+    for (const asOf of [undefined, null, 'invalid-as-of', '2026-02-30T00:00:00Z', 123, false, [], { toString: null }]) {
+      const c = greenCase();
+      c.evidence.completedAt = completedAt;
+      c.expectations.asOf = asOf;
+      const r = evaluateReceipt(c);
+      assert.equal(r.refreshVerdict, 'success');
+      assert.equal(r.verification.provenanceComplete, true);
+      assert.equal(r.freshness.verdict, 'unknown');
+      assert.equal(r.refreshSelection.observationKnown, false);
+      assert.equal(r.refreshSelection.candidates[0].verified, true);
+      assert.equal(r.refreshSelection.candidates[0].futureDated, null);
+      assert.ok(r.retrievals.every((row) => row.ageMs === null && row.withinOneCadence === null));
+      assert.doesNotThrow(() => renderAssessment(r));
+    }
+  }
+});
+
+test('unknown completion cannot promote the current run over a declared prior', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.evidence.completedAt = completedAt;
+    c.expectations.lastSuccessful = { runId: 'prior', completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.refreshSelection.verdict, 'ambiguous');
+    assert.equal(r.refreshSelection.selected, null);
+    assert.ok(r.refreshSelection.candidates.every((candidate) => candidate.verified === false));
+    assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').runId, 'prior');
+  }
+});
+
+test('missing completion preserves failed stages and refuses an unverified dry-run claim', () => {
+  const failed = greenCase();
+  delete failed.evidence.completedAt;
+  failed.evidence.jobs[0].steps.find((step) => step.name === 'Run npm test').conclusion = 'failure';
+  const failedReceipt = evaluateReceipt(failed);
+  assert.equal(failedReceipt.refreshVerdict, 'failed');
+  assert.equal(failedReceipt.failingStage, 'tests');
+  assert.equal(failedReceipt.verification.verdict, 'not_applicable');
+  const dry = greenCase();
+  delete dry.evidence.completedAt;
+  dry.evidence.dryRun = true;
+  const dryReceipt = evaluateReceipt(dry);
+  assert.equal(dryReceipt.refreshVerdict, 'unknown');
+  assert.equal(dryReceipt.verification.verdict, 'unverified');
+  assert.equal(dryReceipt.publication.verdict, 'not_published');
+});
+
+test('malformed completion display preserves raw evidence without coercing objects', () => {
+  const c = greenCase();
+  c.evidence.completedAt = { toString: null };
+  const r = evaluateReceipt(c);
+  assert.deepEqual(r.refreshSelection.candidates[0].completedAt, { toString: null });
+  assert.match(renderAssessment(r), /completedAt=invalid/);
+});
+
+// --- Run identifiers are evidence, never objects to coerce into text -------
+
+const MALFORMED_RUN_IDS = ['', '   ', 0, -1, 1.5, NaN, Infinity, false, true, [], {}, { toString: null }, Object.create(null), [{ toString: null }]];
+
+test('malformed current run identifiers render invalid and remain unverified', () => {
+  for (let i = 0; i < MALFORMED_RUN_IDS.length; i++) {
+    const id = MALFORMED_RUN_IDS[i];
+    const c = greenCase();
+    c.evidence.runId = id;
+    c.evidence.artifacts = [];
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown', `case ${i}`);
+    assert.equal(r.verification.verdict, 'unverified');
+    assert.ok(Object.is(r.run.runId, id));
+    assert.equal(r.refreshSelection.candidates[0].verified, false);
+    const text = renderAssessment(r);
+    assert.match(text, /Run:\s+invalid \(attempt 1\)/);
+    assert.match(text, /candidate:[^\n]*run=invalid/);
+    assert.match(text, /Last attempt: run invalid/);
+    assert.ok(!text.includes('[object Object]'));
+  }
+});
+
+test('absent run identifiers render unknown without inventing identity', () => {
+  for (const id of [undefined, null]) {
+    const c = greenCase();
+    c.evidence.runId = id;
+    c.evidence.artifacts = [];
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.run.runId, null);
+    const text = renderAssessment(r);
+    assert.match(text, /Run:\s+unknown \(attempt 1\)/);
+    assert.match(text, /Last attempt: run unknown/);
+  }
+});
+
+test('valid string and numeric run identifiers keep their values and success semantics', () => {
+  for (const id of ['90000000001', 'named-run', 1, 40764561522]) {
+    const c = greenCase();
+    c.evidence.runId = id;
+    c.evidence.artifacts[0].runId = id;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.lastSuccessfulRefresh.runId, id);
+    const text = renderAssessment(r);
+    assert.ok(text.includes(`Run:         ${id} (attempt 1)`));
+    assert.ok(text.includes(`Last attempt: run ${id} (attempt 1)`));
+    assert.ok(text.includes(`Last successful refresh: run ${id} (attempt 1)`));
+  }
+});
+
+test('display formatting does not coerce numeric and string run bindings into a match', () => {
+  for (const [currentId, otherId] of [[123, '123'], ['123', 123]]) {
+    const c = greenCase();
+    c.evidence.runId = currentId;
+    for (const row of c.evidence.retrievals) row.runId = otherId;
+    c.evidence.artifacts[0].runId = otherId;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.run.runId, currentId);
+    assert.deepEqual(r.sourceSelection.verified, []);
+    assert.ok(r.retrievals.every((row) => !row.valid && row.reasons.some((reason) => /different run/.test(reason))));
+    assert.equal(r.artifacts[0].runId, otherId);
+    assert.equal(r.artifacts[0].verdict, 'rejected');
+    assert.doesNotThrow(() => renderAssessment(r));
+  }
+});
+
+test('future candidate notes never coerce malformed current or declared run identifiers', () => {
+  for (const id of MALFORMED_RUN_IDS) {
+    for (const source of ['current', 'declared']) {
+      const c = greenCase();
+      if (source === 'current') {
+        c.evidence.runId = id;
+        c.evidence.artifacts = [];
+        c.evidence.completedAt = '2026-10-26T00:00:00Z';
+      } else {
+        c.expectations.lastSuccessful = { runId: id, completedAt: '2026-10-26T00:00:00Z' };
+      }
+      const r = evaluateReceipt(c);
+      const future = r.refreshSelection.candidates.find((candidate) => candidate.futureDated === true);
+      assert.ok(Object.is(future.runId, id));
+      assert.equal(future.excluded, true);
+      assert.equal(future.verified, false);
+      assert.ok(r.notes.some((note) => /run invalid at/.test(note)));
+      assert.doesNotThrow(() => renderAssessment(r));
+      assert.equal(r.refreshVerdict, source === 'current' ? 'unknown' : 'success');
+    }
+  }
+});
+
+test('a declared prior with malformed identity stays reported without unsafe rendering', () => {
+  for (const id of MALFORMED_RUN_IDS) {
+    const c = greenCase();
+    c.evidence.jobs[0].steps.find((step) => step.name === 'Run npm test').conclusion = 'failure';
+    c.expectations.lastSuccessful = { runId: id, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'failed');
+    assert.equal(r.lastSuccessfulRefresh.verdict, 'reported');
+    assert.ok(Object.is(r.lastSuccessfulRefresh.runId, id));
+    assert.equal(r.refreshSelection.candidates[0].verified, false);
+    assert.match(renderAssessment(r), /Last successful refresh: run invalid/);
+  }
+});
+
+test('superseded declared identifiers remain raw evidence and render safely', () => {
+  for (const id of MALFORMED_RUN_IDS) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: id, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    assert.ok(Object.is(r.refreshSelection.superseded[0].runId, id));
+    assert.equal(r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared').verified, false);
+    assert.match(renderAssessment(r), /superseded: declared run=invalid/);
+  }
+});
+
+test('reference instants without a timezone have identical semantics across host timezones', () => {
+  const cases = [];
+  for (const value of ['2026-10-25T06:00:04', '2026-10-25 06:00:04', '2026-10-25']) {
+    for (const field of ['startedAt', 'completedAt', 'asOf', 'prior']) {
+      const c = greenCase();
+      if (field === 'asOf') c.expectations.asOf = value;
+      else if (field === 'prior') c.expectations.lastSuccessful = { runId: 'prior', completedAt: value };
+      else c.evidence[field] = value;
+      cases.push({ field, value, c });
+    }
+  }
+  const code = `
+    const fs=require('node:fs'),{evaluateReceipt}=require(process.argv[1]);
+    console.log(JSON.stringify(JSON.parse(fs.readFileSync(0,'utf8')).map(({field,value,c})=>{
+      const r=evaluateReceipt(c);
+      return {field,value,verdict:r.refreshVerdict,verified:r.sourceSelection.verified,
+        freshness:r.freshness.verdict,selection:r.refreshSelection.verdict,
+        observationKnown:r.refreshSelection.observationKnown,
+        candidates:r.refreshSelection.candidates};
+    })));
+  `;
+  const cp = require('node:child_process');
+  const outputs = ['UTC', 'America/Los_Angeles', 'Asia/Tokyo'].map((TZ) =>
+    JSON.parse(cp.execFileSync(process.execPath, ['-e', code, path.join(__dirname, 'refresh-receipt.js')],
+      { input: JSON.stringify(cases), encoding: 'utf8', env: { ...process.env, TZ } })));
+  for (const output of outputs) {
+    assert.deepEqual(output, outputs[0]);
+    for (const row of output) {
+      if (row.field === 'completedAt') {
+        assert.equal(row.verdict, 'unknown');
+        assert.equal(row.candidates[0].orderable, false);
+        assert.equal(row.candidates[0].verified, false);
+      } else if (row.field === 'asOf') {
+        assert.equal(row.freshness, 'unknown');
+        assert.equal(row.observationKnown, false);
+      } else if (row.field === 'prior') {
+        assert.equal(row.selection, 'ambiguous');
+      } else {
+        // An unknown start remains optional; do not invent a run bound.
+        assert.equal(row.verdict, 'success');
+        assert.deepEqual(row.verified, ['hhs_ocr', 'hhs_part2']);
+      }
+    }
+  }
+});
+
+test('explicit offsets preserve the same instant across UTC calendar boundaries', () => {
+  const c = greenCase();
+  c.evidence.startedAt = '2026-10-24T23:00:04-07:00';
+  c.evidence.completedAt = '2026-10-24T23:03:44-07:00';
+  c.expectations.asOf = '2026-10-25T00:00:00-07:00';
+  c.expectations.lastSuccessful = { runId: 'prior', completedAt: '2026-10-24T23:00:00+09:00' };
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshVerdict, 'success');
+  assert.equal(r.refreshSelection.verdict, 'this_run');
+  assert.equal(r.freshness.verdict, 'within_cadence');
+  assert.deepEqual(r.sourceSelection.verified, ['hhs_ocr', 'hhs_part2']);
+});
+
+test('offset reference calendars accept leap days and reject impossible dates', () => {
+  for (const day of ['29', '30']) {
+    const c = greenCase();
+    c.evidence.startedAt = '2024-02-' + day + 'T23:00:00-02:00';
+    c.evidence.completedAt = '2024-02-' + day + 'T23:03:44-02:00';
+    c.evidence.retrievals[0].retrieved_at = '2024-03-01T01:01:10.500Z';
+    c.evidence.retrievals[1].retrieved_at = '2024-03-01T01:01:40.250Z';
+    c.expectations.asOf = '2024-03-01T02:00:00Z';
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, day === '29' ? 'success' : 'unknown');
+    if (day === '30') assert.ok(r.verification.problems.some((p) => /real calendar instant/.test(p)));
+  }
+});
+
+test('malformed retrieval checksums render invalid without coercion and retain raw evidence', () => {
+  let coerced = 0;
+  const poisoned = { toString() { coerced++; throw Error('must not coerce'); } };
+  for (const checksum of [undefined, null, '', 'bad', 123, true, false, [], {}, { toString: null }, [poisoned], poisoned]) {
+    const c = greenCase();
+    c.evidence.retrievals[0].checksum = checksum;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.retrievals[0].checksum, checksum ?? null);
+    assert.equal(r.retrievals[0].valid, false);
+    const text = renderAssessment(r);
+    assert.match(text, checksum == null ? /checksum=unknown/ : /checksum=invalid/);
+  }
+  assert.equal(coerced, 0);
+  const c = greenCase();
+  assert.ok(renderAssessment(evaluateReceipt(c)).includes('checksum=' + c.evidence.retrievals[0].checksum));
+});
+
+const DIAGNOSTIC_MUTATIONS = [
+  ['label', (c,v) => { c.label=v; }],
+  ['repository', (c,v) => { c.evidence.repository=v; }],
+  ['workflow', (c,v) => { c.evidence.workflowPath=v; }],
+  ['event', (c,v) => { c.evidence.event=v; }],
+  ['branch', (c,v) => { c.evidence.branch=v; }],
+  ['head SHA', (c,v) => { c.evidence.headSha=v; }],
+  ['checkout SHA', (c,v) => { c.evidence.checkedOutSha=v; }],
+  ['expected SHA', (c,v) => { c.expectations.expectedHeadSha=v; }],
+  ['expected source', (c,v) => { c.expectations.expectedSources.push(v); }],
+  ['observed source', (c,v) => { c.evidence.retrievals[0].source=v; }],
+  ['invalid source row', (c,v) => { c.evidence.retrievals[0].source=v;c.evidence.retrievals[0].checksum='bad'; }],
+  ['view', (c,v) => { c.evidence.retrievals[0].view=v; }],
+  ['coverage', (c,v) => { c.expectations.expectedCoverage=v; }],
+  ['artifact name', (c,v) => { c.evidence.artifacts[0].name=v; }],
+  ['deployment reference', (c,v) => { c.evidence.deployment.reference=v; }],
+  ['step status', (c,v) => { c.evidence.jobs[0].steps[0].status=v; }],
+  ['step conclusion', (c,v) => { c.evidence.jobs[0].steps[0].conclusion=v; }],
+  ['step name', (c,v) => { c.evidence.jobs[0].steps[0].name=v; }],
+  ['explicit stage name', (c,v) => { c.evidence.jobs[0].steps[0].stage='credentials';c.evidence.jobs[0].steps[0].name=v; }],
+];
+
+test('JSON-shaped non-primitive diagnostic values never crash evaluation or rendering', () => {
+  for (const [label, mutate] of DIAGNOSTIC_MUTATIONS) {
+    for (const value of [[], {}, JSON.parse('{"toString":null}'), [JSON.parse('{"toString":null}')]]) {
+      const c=greenCase();mutate(c,value);
+      let r,text;
+      assert.doesNotThrow(() => { r=evaluateReceipt(c);text=renderAssessment(r); }, label);
+      assert.ok(!text.includes('[object Object]'),label);
+      assert.ok(text.includes('invalid') || label==='step name',label);
+    }
+  }
+});
+
+test('diagnostics do not invoke supplied conversion methods and retain structured evidence', () => {
+  let conversions=0;
+  const value={toString(){conversions++;throw Error('no coercion');},valueOf(){conversions++;throw Error('no coercion');}};
+  for (const [,mutate] of DIAGNOSTIC_MUTATIONS) {
+    const c=greenCase();mutate(c,value);
+    assert.doesNotThrow(() => renderAssessment(evaluateReceipt(c)));
+  }
+  const c=greenCase();c.evidence.repository=value;c.evidence.retrievals[0].view=value;
+  const r=evaluateReceipt(c);
+  assert.equal(r.run.repository,value);
+  assert.equal(r.retrievals[0].view,value);
+  assert.equal(conversions,0);
+});
+
+test('non-string or blank deployment references cannot establish publication identity', () => {
+  for (const reference of [null, undefined, '', '   ', 123, false, true, [], {}, {toString:null}]) {
+    const c=greenCase();c.evidence.deployment={reference,deploymentId:'named-deployment',sha:c.evidence.headSha};
+    const r=evaluateReceipt(c);
+    assert.equal(r.publication.verdict,'unknown');
+    assert.equal(r.deployment.identity.verdict,'unknown');
+    assert.equal(r.deployment.reference,reference??null);
+    assert.doesNotThrow(() => renderAssessment(r));
+  }
 });
 
 // --- The checker itself must stay offline and inert on import -------------
