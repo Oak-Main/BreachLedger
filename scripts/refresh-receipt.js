@@ -157,6 +157,11 @@ function formatRunIdentity(value) {
   return hasRunIdentity(value) ? String(value) : 'invalid';
 }
 
+function formatChecksum(value) {
+  if (value == null) return 'unknown';
+  return typeof value === 'string' && SHA256_HEX.test(value) ? value : 'invalid';
+}
+
 function parseInstant(value) {
   if (typeof value !== 'string') return null;
   const t = Date.parse(value);
@@ -199,22 +204,30 @@ function parseCanonicalInstant(value) {
 /**
  * Parse a reference instant (an `asOf`, or a run's completion time).
  *
- * These are expectations about a run rather than values this repository's own
- * code stamped, so they are not held to the canonical millisecond shape -- but
- * an impossible calendar date is still rejected, because "2026-02-30" parsing
- * successfully into 2026-03-01 would silently change what a receipt means.
+ * Reference instants need an explicit ISO timezone. Offset-less date-times
+ * would otherwise use the host's timezone and change provenance by machine.
+ * Milliseconds are optional, and explicit offsets remain valid even when
+ * their UTC date differs from the declared local calendar date.
  */
 function parseReferenceInstant(value) {
   if (typeof value !== 'string' || value.trim() === '') {
     return { valid: false, ms: null, reason: 'is missing' };
   }
+  const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i);
+  if (!parts) {
+    return { valid: false, ms: null, reason: 'is not an ISO-8601 instant with an explicit timezone' };
+  }
   const ms = Date.parse(value);
   if (!Number.isFinite(ms)) {
     return { valid: false, ms: null, reason: 'is not a valid instant' };
   }
-  const declared = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const declared = parts;
   if (declared) {
-    const d = new Date(ms);
+    const zone = parts[4];
+    const offsetMinutes = zone.toUpperCase() === 'Z' ? 0 :
+      (zone[0] === '+' ? 1 : -1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6)));
+    // Compare the declared calendar in its own offset, not the UTC calendar.
+    const d = new Date(ms + offsetMinutes * 60000);
     const actual = `${String(d.getUTCFullYear()).padStart(4, '0')}-` +
       `${String(d.getUTCMonth() + 1).padStart(2, '0')}-` +
       `${String(d.getUTCDate()).padStart(2, '0')}`;
@@ -1091,7 +1104,7 @@ function renderAssessment(receipt) {
     for (const v of r.retrievals) {
       lines.push(`  ${String(v.source).padEnd(12)} ${String(v.view || '-').padEnd(22)}` +
         ` retrieved_at=${formatTimestamp(v.retrievedAt)}` +
-        `  checksum=${v.checksum || 'unknown'}` +
+        `  checksum=${formatChecksum(v.checksum)}` +
         `  age=${v.ageHours === null ? 'unknown' : v.ageHours + 'h'}` +
         `  timing=${v.timing || 'unknown'}` +
         `  evidence=${v.valid === true ? 'validated' : 'INVALID: ' + (v.reasons || []).join('; ')}`);

@@ -1600,6 +1600,97 @@ test('superseded declared identifiers remain raw evidence and render safely', ()
   }
 });
 
+test('reference instants without a timezone have identical semantics across host timezones', () => {
+  const cases = [];
+  for (const value of ['2026-10-25T06:00:04', '2026-10-25 06:00:04', '2026-10-25']) {
+    for (const field of ['startedAt', 'completedAt', 'asOf', 'prior']) {
+      const c = greenCase();
+      if (field === 'asOf') c.expectations.asOf = value;
+      else if (field === 'prior') c.expectations.lastSuccessful = { runId: 'prior', completedAt: value };
+      else c.evidence[field] = value;
+      cases.push({ field, value, c });
+    }
+  }
+  const code = `
+    const fs=require('node:fs'),{evaluateReceipt}=require(process.argv[1]);
+    console.log(JSON.stringify(JSON.parse(fs.readFileSync(0,'utf8')).map(({field,value,c})=>{
+      const r=evaluateReceipt(c);
+      return {field,value,verdict:r.refreshVerdict,verified:r.sourceSelection.verified,
+        freshness:r.freshness.verdict,selection:r.refreshSelection.verdict,
+        observationKnown:r.refreshSelection.observationKnown,
+        candidates:r.refreshSelection.candidates};
+    })));
+  `;
+  const cp = require('node:child_process');
+  const outputs = ['UTC', 'America/Los_Angeles', 'Asia/Tokyo'].map((TZ) =>
+    JSON.parse(cp.execFileSync(process.execPath, ['-e', code, path.join(__dirname, 'refresh-receipt.js')],
+      { input: JSON.stringify(cases), encoding: 'utf8', env: { ...process.env, TZ } })));
+  for (const output of outputs) {
+    assert.deepEqual(output, outputs[0]);
+    for (const row of output) {
+      if (row.field === 'completedAt') {
+        assert.equal(row.verdict, 'unknown');
+        assert.equal(row.candidates[0].orderable, false);
+        assert.equal(row.candidates[0].verified, false);
+      } else if (row.field === 'asOf') {
+        assert.equal(row.freshness, 'unknown');
+        assert.equal(row.observationKnown, false);
+      } else if (row.field === 'prior') {
+        assert.equal(row.selection, 'ambiguous');
+      } else {
+        // An unknown start remains optional; do not invent a run bound.
+        assert.equal(row.verdict, 'success');
+        assert.deepEqual(row.verified, ['hhs_ocr', 'hhs_part2']);
+      }
+    }
+  }
+});
+
+test('explicit offsets preserve the same instant across UTC calendar boundaries', () => {
+  const c = greenCase();
+  c.evidence.startedAt = '2026-10-24T23:00:04-07:00';
+  c.evidence.completedAt = '2026-10-24T23:03:44-07:00';
+  c.expectations.asOf = '2026-10-25T00:00:00-07:00';
+  c.expectations.lastSuccessful = { runId: 'prior', completedAt: '2026-10-24T23:00:00+09:00' };
+  const r = evaluateReceipt(c);
+  assert.equal(r.refreshVerdict, 'success');
+  assert.equal(r.refreshSelection.verdict, 'this_run');
+  assert.equal(r.freshness.verdict, 'within_cadence');
+  assert.deepEqual(r.sourceSelection.verified, ['hhs_ocr', 'hhs_part2']);
+});
+
+test('offset reference calendars accept leap days and reject impossible dates', () => {
+  for (const day of ['29', '30']) {
+    const c = greenCase();
+    c.evidence.startedAt = '2024-02-' + day + 'T23:00:00-02:00';
+    c.evidence.completedAt = '2024-02-' + day + 'T23:03:44-02:00';
+    c.evidence.retrievals[0].retrieved_at = '2024-03-01T01:01:10.500Z';
+    c.evidence.retrievals[1].retrieved_at = '2024-03-01T01:01:40.250Z';
+    c.expectations.asOf = '2024-03-01T02:00:00Z';
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, day === '29' ? 'success' : 'unknown');
+    if (day === '30') assert.ok(r.verification.problems.some((p) => /real calendar instant/.test(p)));
+  }
+});
+
+test('malformed retrieval checksums render invalid without coercion and retain raw evidence', () => {
+  let coerced = 0;
+  const poisoned = { toString() { coerced++; throw Error('must not coerce'); } };
+  for (const checksum of [undefined, null, '', 'bad', 123, true, false, [], {}, { toString: null }, [poisoned], poisoned]) {
+    const c = greenCase();
+    c.evidence.retrievals[0].checksum = checksum;
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.retrievals[0].checksum, checksum ?? null);
+    assert.equal(r.retrievals[0].valid, false);
+    const text = renderAssessment(r);
+    assert.match(text, checksum == null ? /checksum=unknown/ : /checksum=invalid/);
+  }
+  assert.equal(coerced, 0);
+  const c = greenCase();
+  assert.ok(renderAssessment(evaluateReceipt(c)).includes('checksum=' + c.evidence.retrievals[0].checksum));
+});
+
 // --- The checker itself must stay offline and inert on import -------------
 
 test('importing the checker does not execute it', () => {
