@@ -849,9 +849,9 @@ function evaluateReceipt(caseData) {
       selected = only;
       selectionVerdict = only.source === 'this_run' ? 'this_run' : 'reported';
     }
-  } else if (selectionCandidates.some((c) => !c.placeable)) {
-    // A candidate that cannot be placed on the timeline might be the newest,
-    // so the newest evidenced success is not established.
+  } else if (selectable.some((c) => !c.placeable)) {
+    // An eligible candidate without a place on the timeline might be newest.
+    // Excluded candidates remain visible but cannot participate in ordering.
     selectionVerdict = 'ambiguous';
   } else if (selectable.length === 0) {
     selectionVerdict = 'unknown';

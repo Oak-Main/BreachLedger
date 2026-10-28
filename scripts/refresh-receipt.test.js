@@ -1022,6 +1022,56 @@ test('a malformed declared attempt is retained and excluded without being mislab
   }
 });
 
+test('an excluded prior with unknown completion cannot block a verified current selection', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: 'bad-prior', attempt: '2', completedAt };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'success');
+    assert.equal(r.refreshSelection.verdict, 'this_run');
+    assert.equal(r.refreshSelection.selected.runId, c.evidence.runId);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, true);
+    assert.equal(prior.orderable, false);
+    assert.match(prior.reason, /positive safe integer/);
+    assert.ok(!r.refreshSelection.superseded.some((candidate) => candidate.runId === 'bad-prior'));
+  }
+});
+
+test('an excluded current run with unknown completion cannot block a legitimate reported prior', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.evidence.attempt = '1';
+    c.evidence.completedAt = completedAt;
+    c.expectations.expectedAttempt = null;
+    c.expectations.lastSuccessful = { runId: 'prior', attempt: 1, completedAt: '2026-10-24T00:00:00Z' };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshVerdict, 'unknown');
+    assert.equal(r.refreshSelection.verdict, 'reported');
+    assert.equal(r.lastSuccessfulRefresh.runId, 'prior');
+    const current = r.refreshSelection.candidates.find((candidate) => candidate.source === 'this_run');
+    assert.equal(current.excluded, true);
+    assert.equal(current.orderable, false);
+    assert.match(current.reason, /positive safe integer/);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, false);
+    assert.equal(prior.verified, false);
+  }
+});
+
+test('an eligible prior with unknown completion still prevents an invented newest selection', () => {
+  for (const completedAt of [undefined, null, 'not-a-date']) {
+    const c = greenCase();
+    c.expectations.lastSuccessful = { runId: 'prior', attempt: 1, completedAt };
+    const r = evaluateReceipt(c);
+    assert.equal(r.refreshSelection.verdict, 'ambiguous');
+    assert.equal(r.refreshSelection.selected, null);
+    const prior = r.refreshSelection.candidates.find((candidate) => candidate.source === 'declared');
+    assert.equal(prior.excluded, false);
+    assert.equal(prior.orderable, false);
+  }
+});
+
 test('a stale retrieval cannot mask another required source with invalid timing', () => {
   for (const invalid of [undefined, 'not-a-date', '2026-02-30T00:00:00.000Z', '2026-10-26T06:00:00.000Z']) {
     const c = greenCase();
