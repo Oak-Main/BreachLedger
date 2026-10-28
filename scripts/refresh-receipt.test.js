@@ -1691,6 +1691,65 @@ test('malformed retrieval checksums render invalid without coercion and retain r
   assert.ok(renderAssessment(evaluateReceipt(c)).includes('checksum=' + c.evidence.retrievals[0].checksum));
 });
 
+const DIAGNOSTIC_MUTATIONS = [
+  ['label', (c,v) => { c.label=v; }],
+  ['repository', (c,v) => { c.evidence.repository=v; }],
+  ['workflow', (c,v) => { c.evidence.workflowPath=v; }],
+  ['event', (c,v) => { c.evidence.event=v; }],
+  ['branch', (c,v) => { c.evidence.branch=v; }],
+  ['head SHA', (c,v) => { c.evidence.headSha=v; }],
+  ['checkout SHA', (c,v) => { c.evidence.checkedOutSha=v; }],
+  ['expected SHA', (c,v) => { c.expectations.expectedHeadSha=v; }],
+  ['expected source', (c,v) => { c.expectations.expectedSources.push(v); }],
+  ['observed source', (c,v) => { c.evidence.retrievals[0].source=v; }],
+  ['invalid source row', (c,v) => { c.evidence.retrievals[0].source=v;c.evidence.retrievals[0].checksum='bad'; }],
+  ['view', (c,v) => { c.evidence.retrievals[0].view=v; }],
+  ['coverage', (c,v) => { c.expectations.expectedCoverage=v; }],
+  ['artifact name', (c,v) => { c.evidence.artifacts[0].name=v; }],
+  ['deployment reference', (c,v) => { c.evidence.deployment.reference=v; }],
+  ['step status', (c,v) => { c.evidence.jobs[0].steps[0].status=v; }],
+  ['step conclusion', (c,v) => { c.evidence.jobs[0].steps[0].conclusion=v; }],
+  ['step name', (c,v) => { c.evidence.jobs[0].steps[0].name=v; }],
+  ['explicit stage name', (c,v) => { c.evidence.jobs[0].steps[0].stage='credentials';c.evidence.jobs[0].steps[0].name=v; }],
+];
+
+test('JSON-shaped non-primitive diagnostic values never crash evaluation or rendering', () => {
+  for (const [label, mutate] of DIAGNOSTIC_MUTATIONS) {
+    for (const value of [[], {}, JSON.parse('{"toString":null}'), [JSON.parse('{"toString":null}')]]) {
+      const c=greenCase();mutate(c,value);
+      let r,text;
+      assert.doesNotThrow(() => { r=evaluateReceipt(c);text=renderAssessment(r); }, label);
+      assert.ok(!text.includes('[object Object]'),label);
+      assert.ok(text.includes('invalid') || label==='step name',label);
+    }
+  }
+});
+
+test('diagnostics do not invoke supplied conversion methods and retain structured evidence', () => {
+  let conversions=0;
+  const value={toString(){conversions++;throw Error('no coercion');},valueOf(){conversions++;throw Error('no coercion');}};
+  for (const [,mutate] of DIAGNOSTIC_MUTATIONS) {
+    const c=greenCase();mutate(c,value);
+    assert.doesNotThrow(() => renderAssessment(evaluateReceipt(c)));
+  }
+  const c=greenCase();c.evidence.repository=value;c.evidence.retrievals[0].view=value;
+  const r=evaluateReceipt(c);
+  assert.equal(r.run.repository,value);
+  assert.equal(r.retrievals[0].view,value);
+  assert.equal(conversions,0);
+});
+
+test('non-string or blank deployment references cannot establish publication identity', () => {
+  for (const reference of [null, undefined, '', '   ', 123, false, true, [], {}, {toString:null}]) {
+    const c=greenCase();c.evidence.deployment={reference,deploymentId:'named-deployment',sha:c.evidence.headSha};
+    const r=evaluateReceipt(c);
+    assert.equal(r.publication.verdict,'unknown');
+    assert.equal(r.deployment.identity.verdict,'unknown');
+    assert.equal(r.deployment.reference,reference??null);
+    assert.doesNotThrow(() => renderAssessment(r));
+  }
+});
+
 // --- The checker itself must stay offline and inert on import -------------
 
 test('importing the checker does not execute it', () => {
