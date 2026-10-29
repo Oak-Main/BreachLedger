@@ -362,8 +362,9 @@ async function main() {
     }];
     console.error(`ingest: reading ${fromFile} (${text.length} bytes) instead of fetching`);
   } else {
-    console.error('ingest: driving the HHS OCR portal export sequence (both views)...');
+    console.error(`ingest: driving the HHS OCR portal export sequence (${coverage === 'current' ? 'current view' : 'both views'})...`);
     views = await fetchAllViews({
+      coverage,
       requireArchive: coverage !== 'current',
       gridPage: selected.gridPage,
       label: sourceId,

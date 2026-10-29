@@ -351,7 +351,7 @@ function describeTabState(state) {
  *
  * @returns {Array<{view, csv, checksum, retrieved_at, steps}>}
  */
-async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = true, gridPage = GRID_PAGE, label = 'hhs_ocr' } = {}) {
+async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = true, coverage = 'all', gridPage = GRID_PAGE, label = 'hhs_ocr' } = {}) {
   const views = [];
 
   // View 1: whatever the grid shows by default (Under Investigation).
@@ -366,6 +366,7 @@ async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = 
     gridReportsEmpty: current.gridReportsEmpty,
     steps: current.steps,
   });
+  if (coverage === 'current') return views;
 
   // View 2: Archive. It is the second tab of a PrimeFaces TabView, loaded on
   // demand, so it needs a real tabChange postback rather than a command click.
@@ -651,6 +652,9 @@ async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = 
 }
 
 async function fetchAllViews(options = {}) {
+  if (options.coverage !== undefined && !['all', 'current'].includes(options.coverage)) {
+    throw new Error('source coverage must be all or current');
+  }
   return withFreshSession(() => fetchAllViewsAttempt(options), options.label || 'hhs_ocr');
 }
 

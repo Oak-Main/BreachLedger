@@ -86,7 +86,7 @@ Source, coverage, dry-run status, statement counts and ordered batch digests mus
 agree with that durable manifest; unbound legacy stages are rejected. Failure
 receipts use the same default/environment-selected directory as normal manifests.
 
-Local verification after these corrections: **629 tests passed**, zero failed or
+Local verification after these corrections: **631 tests passed**, zero failed or
 skipped; typecheck passed (18 files). The empty-data build smoke test also passed.
 
 [Full-coverage dry run 40919381366](https://github.com/Oak-Main/BreachLedger/actions/runs/40919381366)
@@ -109,3 +109,9 @@ The final integrity review additionally requires an exact expected source set,
 rejects duplicate/unregistered sources and confines batch reads to the stage
 directory (including symlink targets). The front-page form action is validated
 before navigation can transmit its session cookie.
+
+The last review had no open findings and noted the pre-existing current-only
+option discrepancy. Explicit `coverage=current` now returns after the current
+view without an archive request; `coverage=all` still requires independently
+verified archives. Unknown coverage is refused before fetching. Regression tests
+assert both the returned view set and the absence of archive network requests.

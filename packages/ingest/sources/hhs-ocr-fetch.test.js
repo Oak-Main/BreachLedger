@@ -986,3 +986,18 @@ test('fallback front-page form actions are validated before transmitting the ses
     assert.equal(calls.some(c => c.method === 'POST'), false);
   }
 });
+
+test('explicit current coverage returns only current data and never requests archive selection', async () => {
+  const { impl, calls } = mockTabbedPortal();
+  const views = await fetchAllViews({ fetchImpl: impl, coverage: 'current' });
+  assert.deepEqual(views.map(v => v.view), ['under_investigation']);
+  assert.equal(views[0].csv, CSV);
+  assert.equal(calls.length, 2, 'only the current grid and its export may be fetched');
+  assert.equal(calls.some(c => c.body.includes('tabChange') || c.body.includes('_activeIndex=1')), false);
+});
+
+test('unknown coverage fails before requesting any source data', async () => {
+  let calls = 0;
+  await assert.rejects(() => fetchAllViews({ coverage: 'unknown', fetchImpl: async () => { calls++; } }), /coverage must be all or current/);
+  assert.equal(calls, 0);
+});
