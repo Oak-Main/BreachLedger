@@ -42,6 +42,30 @@ function sha256(text) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
+/**
+ * Strip a session id from a string.
+ *
+ * The portal carries its session id as a path segment ("....jsf;jsessionid=...").
+ * The manifest is retained as a workflow artifact in a public repository, so a
+ * credential-shaped value must not reach it -- not even inside the raw export
+ * steps.
+ */
+function redact(text) {
+  return String(text)
+    .replace(/;jsessionid=[^;"'&\s]*/gi, '')
+    .replace(/([?&]jsessionid=)[^&"'\s]*/gi, '$1');
+}
+
+/** Every string in the export steps, with any session id removed. */
+function redactSteps(steps) {
+  if (!steps || typeof steps !== 'object') return steps || null;
+  const out = {};
+  for (const [k, v] of Object.entries(steps)) {
+    out[k] = typeof v === 'string' ? redact(v) : v;
+  }
+  return out;
+}
+
 function runContext(env = process.env) {
   return {
     id: env.GITHUB_RUN_ID || null,
@@ -111,7 +135,7 @@ function buildManifest(input) {
         archive_verification: v.archiveVerification || null,
         archive_verification_basis: v.archiveVerificationBasis || null,
         archive_switch_evidence: v.archiveSwitchEvidence || null,
-        export: v.steps || null,
+        export: redactSteps(v.steps),
       };
     }),
     records: {
