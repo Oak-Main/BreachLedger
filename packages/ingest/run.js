@@ -5,10 +5,21 @@
 // Usage:
 //   node packages/ingest/run.js --source hhs_ocr [--remote] [--dry-run]
 //   node packages/ingest/run.js --source hhs_ocr --from-file export.csv
+//   node packages/ingest/run.js --source hhs_ocr --remote --stage <dir>
+//   node packages/ingest/run.js --apply <dir> [--remote]
 //
 // --from-file exists so the pipeline can be exercised against a saved export
 // without touching the government portal. --dry-run does everything except
 // write to D1.
+//
+// --stage and --apply split the write in two so that EVERY source is fetched
+// and validated before ANY source is written. A run that ingests two sources
+// sequentially and writes each one as it goes leaves the database holding the
+// first source's new rows when the second source fails -- the step fails, but
+// the earlier write is already committed and is not rolled back. Staging
+// writes the exact statements that were validated to disk instead; --apply
+// then writes them in the same batches, in the same order, once every source
+// has passed its coverage checks.
 //
 // Failure policy (spec sections 4 and 11): any source that cannot be retrieved
 // or parsed FAILS THE RUN. A partial ingest that silently drops a source would
@@ -72,16 +83,104 @@ function d1File(sql, remote) {
   }
 }
 
+/**
+ * Write the statements that --stage validated.
+ *
+ * The staged files are the exact batches the direct write path would have
+ * applied, in the same order, so applying them writes the same bytes in the
+ * same sequence. Nothing is applied unless every source that was asked for
+ * produced a manifest: a source that failed to stage leaves no manifest, and
+ * the stage is refused rather than half-applied.
+ */
+function applyStaged(dir, remote, expectSources) {
+  const manifests = fs.readdirSync(dir).filter((f) => f.endsWith('.manifest.json')).sort();
+  const staged = manifests.map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+  const stagedSources = staged.map((m) => m.source);
+
+  if (expectSources && expectSources.length) {
+    const missing = expectSources.filter((s) => !stagedSources.includes(s));
+    if (missing.length) {
+      throw new Error(
+        `ingest: refusing to apply the stage: no validated data staged for source(s) ` +
+          `${missing.join(', ')} (staged: ${stagedSources.join(', ') || 'none'})`
+      );
+    }
+  }
+  if (!manifests.length) {
+    throw new Error(`ingest: refusing to apply the stage: no staged manifests found in ${dir}`);
+  }
+
+  // The apply list comes from the MANIFESTS, not from whatever happens to be
+  // lying in the directory. A batch a manifest lists but that is missing means
+  // the stage is incomplete, and applying the rest would apply that source
+  // only in part. A .sql file that no manifest lists belongs to no source, and
+  // must not be applied at all.
+  const files = [];
+  for (const m of staged) {
+    for (const batch of m.batches || []) {
+      const file = path.join(dir, batch);
+      if (!fs.existsSync(file)) {
+        throw new Error(
+          `ingest: refusing to apply the stage: the staged batch ${batch} for source ` +
+            `${m.source} is missing, so that source would be applied only in part`
+        );
+      }
+      files.push({ source: m.source, file });
+    }
+  }
+  const listed = new Set(files.map((f) => path.basename(f.file)));
+  const stray = fs.readdirSync(dir).filter((f) => f.endsWith('.sql') && !listed.has(f));
+  if (stray.length) {
+    throw new Error(
+      `ingest: refusing to apply the stage: ${stray.length} file(s) in ${dir} are listed by no ` +
+        `manifest (${stray.join(', ')}); they may belong to an earlier stage`
+    );
+  }
+
+  if (!files.length) {
+    console.error('ingest: every staged source reported no changes; nothing to apply');
+    return;
+  }
+
+  // ONE D1 execution for the whole stage. Separate executions are separate
+  // transactions: if the second one fails -- a transient remote error, a quota
+  // error, a constraint error -- the first is already committed and the
+  // database is left holding a partial ingest that no rollback undoes. One
+  // execution is one operation, so the stage is applied or it is not.
+  const combined = files.map((f) => fs.readFileSync(f.file, 'utf8')).join('\n');
+  console.error(
+    `ingest: applying ${files.length} staged batch(es) from ${dir} in ONE D1 operation ` +
+      `(${files.map((f) => f.source).join(', ')})`
+  );
+  d1File(combined, remote);
+  console.error('ingest: staged data applied');
+}
+
 async function main() {
   const sourceId = arg('source', 'hhs_ocr');
   const remote = Boolean(arg('remote', false));
   const dryRun = Boolean(arg('dry-run', false));
   const fromFile = arg('from-file', null);
+  // Staging: write the validated statements to disk instead of to D1, so that
+  // a second source's failure cannot leave the first source already written.
+  const stageDir = arg('stage', null);
+  // Applying: write the staged statements that --stage produced.
+  const applyDir = arg('apply', null);
   // Coverage policy. 'all' (default) requires the archive view and fails
   // otherwise; 'current' permits a documented partial ingest of the recent
   // view only. Partial is acceptable ONLY because /sources states the exact
   // coverage -- what is forbidden is presenting a slice AS the whole record.
   const coverage = arg('coverage', 'all');
+
+  if (applyDir) {
+    const expect = arg('expect-sources', null);
+    applyStaged(
+      applyDir,
+      remote,
+      typeof expect === 'string' ? expect.split(',').map((s) => s.trim()).filter(Boolean) : []
+    );
+    return;
+  }
 
   const selected = SOURCES[sourceId];
   if (!selected) {
@@ -116,9 +215,14 @@ async function main() {
     });
     if (coverage === 'current') console.error('ingest: coverage=current (recent view only, documented on /sources)');
     for (const v of views) {
+      const archive = v.archiveVerification
+        ? `, archive verified by ${v.archiveVerificationBasis} ` +
+          `(server activeIndex=${v.archiveSwitchEvidence.activeIndex}, ` +
+          `archive panel visible=${v.archiveSwitchEvidence.panelVisible})`
+        : '';
       console.error(
         `ingest: view ${v.view}: ${v.steps.bytes || v.csv.length} bytes via ${v.steps.path} path, ` +
-          `${v.steps.encoding} encoding, command ${v.steps.csvCommand}`
+          `${v.steps.encoding} encoding, command ${v.steps.csvCommand}${archive}`
       );
     }
   }
@@ -267,12 +371,45 @@ async function main() {
     console.error('ingest: --dry-run, no writes performed');
     return;
   }
+
+  const files = batch(statements, 400);
+
+  if (stageDir) {
+    // Stage the validated statements instead of writing them, so that no
+    // source is written until every source has passed its coverage checks.
+    // A manifest is written even when a source has no changes, so that the
+    // apply phase can tell "validated, nothing to do" from "never ran".
+    fs.mkdirSync(stageDir, { recursive: true });
+    const written = [];
+    files.forEach((sql, i) => {
+      const file = path.join(stageDir, `${sourceId}.batch-${String(i + 1).padStart(3, '0')}.sql`);
+      fs.writeFileSync(file, sql);
+      written.push(path.basename(file));
+    });
+    fs.writeFileSync(
+      path.join(stageDir, `${sourceId}.manifest.json`),
+      JSON.stringify({
+        source: sourceId,
+        coverage,
+        statements: statements.length,
+        batches: written,
+        stats,
+        stagedAt: now,
+      }, null, 2),
+      'utf8'
+    );
+    console.error(
+      `ingest: staged ${statements.length} statement(s) in ${written.length} batch(es) -> ${stageDir} ` +
+        '(no D1 write in this phase)'
+    );
+    return;
+  }
+
   if (!statements.length) {
     console.error('ingest: nothing to write; database already matches the source');
     return;
   }
 
-  const files = batch(statements, 400);
   files.forEach((sql, i) => {
     console.error(`ingest: applying batch ${i + 1}/${files.length}`);
     d1File(sql, remote);
