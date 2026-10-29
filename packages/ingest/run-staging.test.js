@@ -1,0 +1,79 @@
+// Tests for the staged-write safeguard.
+//
+// The safeguard exists because a two-source ingest that writes each source as
+// it goes leaves the first source's rows committed when the second source
+// fails. Staging splits the write: every source is fetched and validated
+// first, and the statements are written only after all of them passed.
+//
+// These tests exercise the REFUSAL paths of the apply phase, which is the
+// part that must never write when the stage is incomplete. They never reach
+// D1.
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const ROOT = path.join(__dirname, '..', '..');
+const RUN = path.join(ROOT, 'packages', 'ingest', 'run.js');
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'breachledger-stage-'));
+}
+
+function apply(stageDir, extraArgs = []) {
+  const res = spawnSync(process.execPath, [RUN, '--apply', stageDir, ...extraArgs], {
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  return { code: res.status, out: `${res.stdout || ''}${res.stderr || ''}` };
+}
+
+test('the apply phase refuses a stage that nothing was written to', () => {
+  const dir = tmpDir();
+  const res = apply(dir);
+  assert.notEqual(res.code, 0, 'an empty stage must not be applied');
+  assert.match(res.out, /refusing to apply the stage/);
+});
+
+test('the apply phase refuses when a source produced no validated data', () => {
+  const dir = tmpDir();
+  // Only hhs_ocr staged; hhs_part2 is still expected.
+  fs.writeFileSync(
+    path.join(dir, 'hhs_ocr.manifest.json'),
+    JSON.stringify({ source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], stats: {} }),
+    'utf8'
+  );
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr,hhs_part2']);
+  assert.notEqual(res.code, 0, 'a partial stage must not be applied');
+  assert.match(res.out, /no validated data staged for source\(s\) hhs_part2/);
+});
+
+test('a stage whose sources all report no changes applies nothing and succeeds', () => {
+  const dir = tmpDir();
+  for (const source of ['hhs_ocr', 'hhs_part2']) {
+    fs.writeFileSync(
+      path.join(dir, `${source}.manifest.json`),
+      JSON.stringify({ source, coverage: 'all', statements: 0, batches: [], stats: {} }),
+      'utf8'
+    );
+  }
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr,hhs_part2']);
+  assert.equal(res.code, 0, res.out);
+  assert.match(res.out, /every staged source reported no changes/);
+  assert.match(res.out, /nothing to apply/);
+});
+
+test('the apply phase refuses when a source is missing from the expectation list', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'hhs_ocr.manifest.json'),
+    JSON.stringify({ source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], stats: {} }),
+    'utf8'
+  );
+  // Expecting only hhs_ocr is satisfied; the guard is about MISSING sources.
+  const ok = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.equal(ok.code, 0, ok.out);
+});

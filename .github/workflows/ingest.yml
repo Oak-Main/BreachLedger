@@ -97,12 +97,32 @@ jobs:
           fi
           DRY=""
           if [ "$INGEST_DRY_RUN" = "true" ]; then DRY="--dry-run"; fi
+          STAGE=/tmp/ingest-staged
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
           : > /tmp/ingest.log
+
+          # PHASE 1 -- fetch, parse and validate EVERY source. Nothing is
+          # written to D1 in this phase. Writing each source as it is
+          # ingested would leave the first source's rows already committed
+          # when the second source fails: the step fails, but the earlier
+          # write is NOT rolled back, and the site would then be serving a
+          # record set that claims coverage it does not have.
           for s in $SOURCES; do
             echo "=== ingest: $s (coverage=$INGEST_COVERAGE) ===" | tee -a /tmp/ingest.log
             node packages/ingest/run.js --source "$s" --remote \
-              --coverage "$INGEST_COVERAGE" $DRY 2>&1 | tee -a /tmp/ingest.log
+              --coverage "$INGEST_COVERAGE" $DRY --stage "$STAGE" 2>&1 | tee -a /tmp/ingest.log
           done
+
+          # PHASE 2 -- write the staged statements, which are exactly the
+          # statements phase 1 validated and computed. Reached only when every
+          # source passed its coverage checks.
+          if [ -z "$DRY" ]; then
+            EXPECT=$(echo $SOURCES | tr ' ' ',')
+            echo "=== ingest: applying staged data for: $SOURCES ===" | tee -a /tmp/ingest.log
+            node packages/ingest/run.js --apply "$STAGE" --remote \
+              --expect-sources "$EXPECT" 2>&1 | tee -a /tmp/ingest.log
+          fi
 
       - name: Publish ingest summary
         if: always()

@@ -182,8 +182,25 @@ const TABBED_GRID = `<html><form id="ocrForm" action="/ocr/breach/breach_report_
 const ARCHIVE_PARTIAL =
   '<?xml version="1.0"?><partial-response><changes>' +
   '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+  '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
+  '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
   '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
-  '<img alt="CSV" src="/i/csv.png"></a></div>]]></update>' +
+  '<img alt="CSV" src="/i/csv.png"></a></div></div>]]></update>' +
+  '<update id="j_id1:javax.faces.ViewState:0"><![CDATA[VS-ARCHIVE]]></update>' +
+  '</changes></partial-response>';
+
+// The same switch, but the server's response does NOT say the Archive tab was
+// selected: the activeIndex still reads 0 and the Archive panel is still
+// hidden. A switch that did not take. The row data alone cannot tell this
+// apart from an archive that is genuinely empty, which is exactly why the
+// server's own answer is consulted.
+const UNCONFIRMED_PARTIAL =
+  '<?xml version="1.0"?><partial-response><changes>' +
+  '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+  '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="0">' +
+  '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
+  '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
+  '<img alt="CSV" src="/i/csv.png"></a></div></div>]]></update>' +
   '<update id="j_id1:javax.faces.ViewState:0"><![CDATA[VS-ARCHIVE]]></update>' +
   '</changes></partial-response>';
 
@@ -194,7 +211,7 @@ const ARCHIVE_CSV = 'Name of Covered Entity,State\nOld Clinic,NY\n';
  * switches views; when false the archive export returns the SAME rows as the
  * recent view, which is the silent failure the implementation must catch.
  */
-function mockTabbedPortal({ archiveWorks = true, tabbed = TABBED_GRID, stamps = null } = {}) {
+function mockTabbedPortal({ archiveWorks = true, tabbed = TABBED_GRID, stamps = null, archivePartial = ARCHIVE_PARTIAL } = {}) {
   const calls = [];
   const stamp = (kind, fallback) => (stamps && stamps[kind]) || fallback;
   const impl = async (url, opts = {}) => {
@@ -203,7 +220,7 @@ function mockTabbedPortal({ archiveWorks = true, tabbed = TABBED_GRID, stamps = 
     calls.push({ url, method, body });
     if (method === 'GET') return { body: tabbed, ...stamp('grid', { checksum: 'g', retrieved_at: 'T' }) };
     if (body.includes('tabChange') || body.includes('_activeIndex=1')) {
-      return { body: ARCHIVE_PARTIAL, ...stamp('partial', { checksum: 'p', retrieved_at: 'T' }) };
+      return { body: archivePartial, ...stamp('partial', { checksum: 'p', retrieved_at: 'T' }) };
     }
     if (body.includes('j_idt500')) {
       return {
@@ -332,9 +349,11 @@ test('dataRowsOf ignores the header, which carries volatile JSF object identity'
   assert.equal(dataRowsOf(a), dataRowsOf(b));
 });
 
-test('does not mistake two legitimately empty views for a failed tab switch', async () => {
-  // The live Part 2 listing: no records in either view. Identical data rows is
-  // the correct outcome here, not evidence the tab failed to change.
+/**
+ * A portal whose BOTH views are empty -- the live Part 2 listing.
+ * `switchPartial` decides what the server says about the tab switch.
+ */
+function emptyViewsPortal({ switchPartial = ARCHIVE_PARTIAL } = {}) {
   const EMPTY = '"javax.faces.component.UIPanel@aaa","State"\n';
   const EMPTY2 = '"javax.faces.component.UIPanel@bbb","State"\n';
   const grid = TABBED_GRID.replace(
@@ -342,17 +361,68 @@ test('does not mistake two legitimately empty views for a failed tab switch', as
     '<tr class="ui-datatable-empty-message"><td>No records found.</td></tr><ul class="ui-tabs-nav">'
   );
   let exports = 0;
-  const impl = async (url, opts = {}) => {
+  return async (url, opts = {}) => {
     const body = String(opts.body || '');
     if ((opts.method || 'GET') === 'GET') return { body: grid, checksum: 'g', retrieved_at: 'T' };
     if (body.includes('tabChange') || body.includes('_activeIndex=1')) {
-      return { body: ARCHIVE_PARTIAL, checksum: 'p', retrieved_at: 'T' };
+      return { body: switchPartial, checksum: 'p', retrieved_at: 'T' };
     }
     return { body: exports++ === 0 ? EMPTY : EMPTY2, checksum: `c${exports}`, retrieved_at: 'T' };
   };
+}
+
+test('does not mistake two legitimately empty views for a failed tab switch', async () => {
+  // The live Part 2 listing: no records in either view. Identical data rows is
+  // the correct outcome here, not evidence the tab failed to change.
+  const impl = emptyViewsPortal();
   const views = await fetchAllViews({ fetchImpl: impl, gridPage: GRID_PAGE });
   assert.equal(views.length, 2, 'the archive view should be accepted, not rejected');
   assert.equal(views[1].view, 'archive');
+});
+
+test('a legitimately empty archive is VERIFIED when the server confirms the switch', async () => {
+  // Two empty exports are identical whichever tab was selected, so the row
+  // comparison cannot settle it. The server can: its response says which tab
+  // it selected. That makes an empty archive a VERIFIED empty archive rather
+  // than an unverified selection.
+  const impl = emptyViewsPortal();
+  const views = await fetchAllViews({ fetchImpl: impl, gridPage: GRID_PAGE });
+  assert.equal(views.length, 2);
+  assert.equal(views[1].view, 'archive');
+  assert.equal(views[1].archiveVerification, 'verified');
+  assert.equal(views[1].archiveVerificationBasis, 'server-tab-state');
+  assert.equal(views[1].archiveSwitchEvidence.serverConfirmed, true);
+  assert.equal(views[1].archiveSwitchEvidence.activeIndex, '1');
+  assert.equal(views[1].archiveSwitchEvidence.panelVisible, true);
+});
+
+test('an empty listing is REFUSED when the server does not confirm the switch', async () => {
+  // The rows are identical and empty, and the server did not report the
+  // Archive tab as selected. Nothing distinguishes this from a switch that
+  // never happened, so it must not be published as an archive.
+  const impl = emptyViewsPortal({ switchPartial: UNCONFIRMED_PARTIAL });
+  await assert.rejects(
+    () => fetchAllViews({ fetchImpl: impl, gridPage: GRID_PAGE }),
+    /not a verified archive/
+  );
+});
+
+test('coverage=current does not publish an unconfirmed archive view', async () => {
+  // An unverified response must never be relabelled as an archive, even when
+  // the archive is not required.
+  const impl = emptyViewsPortal({ switchPartial: UNCONFIRMED_PARTIAL });
+  const views = await fetchAllViews({ fetchImpl: impl, gridPage: GRID_PAGE, requireArchive: false });
+  assert.equal(views.length, 1, 'only the recent view may be published');
+  assert.equal(views[0].view, 'under_investigation');
+  assert.equal(views.some((v) => v.view === 'archive'), false);
+});
+
+test('an archive whose rows differ from the recent view is verified by the rows themselves', async () => {
+  const { impl } = mockTabbedPortal({ archiveWorks: true });
+  const views = await fetchAllViews({ fetchImpl: impl });
+  assert.equal(views[1].view, 'archive');
+  assert.equal(views[1].archiveVerification, 'verified');
+  assert.equal(views[1].archiveVerificationBasis, 'distinct-data-rows');
 });
 
 test('still rejects a failed tab switch when the views actually hold rows', async () => {

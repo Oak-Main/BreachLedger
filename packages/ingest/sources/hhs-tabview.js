@@ -117,6 +117,51 @@ function mergeViewState(hidden, viewState) {
   return { ...hidden, [key]: viewState };
 }
 
+/**
+ * Read the tab state the SERVER reported back, so that a tab switch can be
+ * confirmed independently of how many rows came back.
+ *
+ * Two server-side signals, both present in the switch response:
+ *
+ *   - the TabView mirrors the selected tab into an `<tabview>_activeIndex`
+ *     hidden field, so the response says which tab is now selected;
+ *   - PrimeFaces renders the inactive panels with `ui-helper-hidden`, so the
+ *     panel of the selected tab is the one WITHOUT that class.
+ *
+ * This matters because the data comparison cannot settle the question when
+ * both views are empty: two empty exports are identical no matter which tab
+ * was actually selected, and their bytes differ for unrelated reasons (the
+ * header row carries volatile JSF object identity). The server's own answer
+ * does not depend on the row count.
+ *
+ * @param {string} html         the switch response (page or unwrapped partial)
+ * @param {object} tabView      { id, field } as returned by findTabView
+ * @param {object} hidden       the hidden inputs extracted from that response
+ * @param {string} tabClientId  the client id of the tab that should now be active
+ * @returns {{activeIndex: string|null, panelVisible: boolean|null}}
+ */
+function readTabState(html, tabView, hidden, tabClientId) {
+  let activeIndex = null;
+  if (tabView && hidden && hidden[tabView.field] !== undefined && hidden[tabView.field] !== null) {
+    activeIndex = String(hidden[tabView.field]);
+  }
+
+  let panelVisible = null;
+  if (tabClientId) {
+    const escaped = String(tabClientId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const panelRe = new RegExp(`<div[^>]*\\bid\\s*=\\s*["']${escaped}["'][^>]*>`, 'i');
+    const panel = panelRe.exec(String(html || ''));
+    if (panel) {
+      const classMatch = /class\s*=\s*["']([^"']*)["']/i.exec(panel[0]);
+      // No class attribute at all means the panel was rendered as a plain
+      // panel -- visible, not hidden.
+      panelVisible = classMatch ? !/ui-helper-hidden/.test(classMatch[1]) : true;
+    }
+  }
+
+  return { activeIndex, panelVisible };
+}
+
 module.exports = {
   findTabView,
   findTabId,
@@ -124,4 +169,5 @@ module.exports = {
   buildTabPostbackFields,
   extractPartialResponse,
   mergeViewState,
+  readTabState,
 };

@@ -95,3 +95,42 @@ test('merged ViewState replaces the stale token', () => {
 test('missing ViewState leaves the field set unchanged', () => {
   assert.deepEqual(tv.mergeViewState(HIDDEN, null), HIDDEN);
 });
+
+// --- Reading the tab state the server reported back ------------------------
+//
+// This is what lets an archive switch be confirmed independently of how many
+// rows came back. Two empty exports are identical whichever tab was selected,
+// so the row comparison cannot settle the question; the server's own answer
+// can.
+
+const TABVIEW = { id: 'ocrForm:j_idt31', field: 'ocrForm:j_idt31_activeIndex' };
+
+test('reads the selected tab index out of the response', () => {
+  const html = '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">';
+  const state = tv.readTabState(html, TABVIEW, { 'ocrForm:j_idt31_activeIndex': '1' }, 'ocrForm:j_idt31:archiveTab');
+  assert.equal(state.activeIndex, '1');
+});
+
+test('reports the archive panel as visible once it is no longer hidden', () => {
+  const visible = '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">';
+  const hidden = '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">';
+  assert.equal(tv.readTabState(visible, TABVIEW, {}, 'ocrForm:j_idt31:archiveTab').panelVisible, true);
+  assert.equal(tv.readTabState(hidden, TABVIEW, {}, 'ocrForm:j_idt31:archiveTab').panelVisible, false);
+});
+
+test('reports absent rather than guessing when the response says nothing', () => {
+  const state = tv.readTabState('<html><body>nothing here</body></html>', TABVIEW, {}, 'ocrForm:j_idt31:archiveTab');
+  assert.equal(state.activeIndex, null);
+  assert.equal(state.panelVisible, null);
+});
+
+test('a panel rendered without a class attribute counts as visible', () => {
+  const html = '<div id="ocrForm:j_idt31:archiveTab">';
+  assert.equal(tv.readTabState(html, TABVIEW, {}, 'ocrForm:j_idt31:archiveTab').panelVisible, true);
+});
+
+test('a client id containing regex metacharacters is matched literally', () => {
+  const html = '<div id="ocrForm:j_idt31:archive.tab" class="ui-tabs-panel ui-helper-hidden">';
+  const state = tv.readTabState(html, TABVIEW, {}, 'ocrForm:j_idt31:archive.tab');
+  assert.equal(state.panelVisible, false);
+});
