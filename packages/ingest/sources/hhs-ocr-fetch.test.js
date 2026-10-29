@@ -403,7 +403,7 @@ test('an empty listing is REFUSED when the server does not confirm the switch', 
   const impl = emptyViewsPortal({ switchPartial: UNCONFIRMED_PARTIAL });
   await assert.rejects(
     () => fetchAllViews({ fetchImpl: impl, gridPage: GRID_PAGE }),
-    /not a verified archive/
+    /did not confirm the archive tab switch/
   );
 });
 
@@ -423,6 +423,53 @@ test('an archive whose rows differ from the recent view is verified by the rows 
   assert.equal(views[1].view, 'archive');
   assert.equal(views[1].archiveVerification, 'verified');
   assert.equal(views[1].archiveVerificationBasis, 'distinct-data-rows');
+});
+
+test('a differing export is refused when the server did not confirm the switch', async () => {
+  // The panel is hidden, so the server did not select the Archive tab. The
+  // rows differ, but a different PAGE of the recent table also differs: no
+  // row comparison can stand in for the server's own answer.
+  const hiddenPanel =
+    '<?xml version="1.0"?><partial-response><changes>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
+    '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
+    '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
+    '<img alt="CSV" src="/i/csv.png"></a></div></div>]]></update>' +
+    '<update id="j_id1:javax.faces.ViewState:0"><![CDATA[VS-ARCHIVE]]></update>' +
+    '</changes></partial-response>';
+  const { impl } = mockTabbedPortal({ archiveWorks: true, archivePartial: hiddenPanel });
+  await assert.rejects(
+    () => fetchAllViews({ fetchImpl: impl }),
+    /the server did not confirm the archive tab switch|the server's own signals contradict each other/
+  );
+});
+
+test('the switch request posts the index the archive actually occupies', async () => {
+  // The archive is found by its label, so the index posted with the switch has
+  // to come from the navigation order. A hardcoded 1 would select the wrong
+  // tab on a reordered TabView.
+  const reordered = TABBED_GRID.replace(
+    '<ul class="ui-tabs-nav">\n  <li><a href="#ocrForm:j_idt31:underInvTab" tabindex="-1">Under Investigation</a></li>\n  <li><a href="#ocrForm:j_idt31:archiveTab" tabindex="-1">Archive</a></li>\n</ul>',
+    '<ul class="ui-tabs-nav">\n  <li><a href="#ocrForm:j_idt31:archiveTab" tabindex="-1">Archive</a></li>\n  <li><a href="#ocrForm:j_idt31:underInvTab" tabindex="-1">Under Investigation</a></li>\n</ul>'
+  );
+  assert.notEqual(reordered, TABBED_GRID, 'the reordered grid fixture must differ');
+  const bodies = [];
+  const { impl } = mockTabbedPortal({ archiveWorks: true, tabbed: reordered });
+  const wrapped = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'POST') bodies.push(String(opts.body || ''));
+    return impl(url, opts);
+  };
+  await fetchAllViews({ fetchImpl: wrapped }).catch(() => {});
+  assert.ok(bodies.length > 0, 'a switch must have been posted');
+  assert.ok(
+    bodies.some((b) => b.includes('activeIndex=0')),
+    `the switch must post the archive's real index (0), bodies: ${bodies.join(' | ')}`
+  );
+  assert.ok(
+    !bodies.some((b) => b.includes('activeIndex=1')),
+    `the switch must not post a hardcoded index of 1, bodies: ${bodies.join(' | ')}`
+  );
 });
 
 // --- The signals and the data both have to agree ---------------------------

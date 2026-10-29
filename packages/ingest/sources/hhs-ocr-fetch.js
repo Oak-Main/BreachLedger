@@ -114,7 +114,8 @@ class CookieJar {
  * that is actually CSV. Returns the CSV response, or null with the attempts
  * recorded for diagnosis.
  */
-async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts }) {
+async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts, label = '' }) {
+  const tag = label ? ` ${label}` : '';
   for (const enc of jsf.commandEncodings(hidden, commandId)) {
     let res;
     try {
@@ -126,14 +127,14 @@ async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts 
         headers: { 'Content-Type': enc.contentType },
       });
     } catch (err) {
-      attempts.push(`export[${enc.name}]: request failed: ${err.message}`);
+      attempts.push(`export[${enc.name}]${tag}: request failed: ${err.message}`);
       continue;
     }
     if (jsf.looksLikeCsv(res.body)) {
       return { res, encoding: enc.name };
     }
     attempts.push(
-      `export[${enc.name}]: ${res.body.length} bytes, not CSV (${jsf.excerpt(res.body, 120)})`
+      `export[${enc.name}]${tag}: ${res.body.length} bytes, not CSV (${jsf.excerpt(res.body, 120)})`
     );
   }
   return null;
@@ -312,9 +313,13 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
 
   // Two shapes of tab switch, because which one the server accepts is a
   // configuration detail: a PrimeFaces AJAX tabChange, and a plain postback.
+  // The index posted is the archive's index in the navigation order, read
+  // from the grid page -- not an assumed 1 -- so a reordered TabView selects
+  // the tab that was actually found.
+  const switchIndex = archiveTabIndex === null ? 0 : archiveTabIndex;
   const switchVariants = [
-    { name: 'ajax-tabchange', fields: tv.buildTabChangeFields(gridHidden, tabView, 1, archiveTabId) },
-    { name: 'plain-postback', fields: tv.buildTabPostbackFields(gridHidden, tabView, 1) },
+    { name: 'ajax-tabchange', fields: tv.buildTabChangeFields(gridHidden, tabView, switchIndex, archiveTabId) },
+    { name: 'plain-postback', fields: tv.buildTabPostbackFields(gridHidden, tabView, switchIndex) },
   ];
 
   let archived = null;
@@ -408,8 +413,12 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
     // a raw comparison here passes on content it should reject. Observed on the
     // Part 2 report, where both views are currently empty: 208 bytes each,
     // different hashes, same (zero) rows.
+    // Rows are compared by their CONTENT, with whitespace runs collapsed, so
+    // that two renderings of the same record which differ only in spacing are
+    // not read as two different records.
+    const normaliseRow = (l) => l.trim().replace(/\s+/g, ' ');
     const recentData = dataRowsOf(views[0].csv);
-    const recentRows = recentData.split('\n').map((l) => l.trim()).filter(Boolean);
+    const recentRows = recentData.split('\n').map(normaliseRow).filter(Boolean);
     const recentRowSet = new Set(recentRows);
 
     let got = null;
@@ -418,29 +427,28 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
 
     for (const candidate of exports) {
       const archiveData = dataRowsOf(candidate.res.body);
-      const archiveRows = archiveData.split('\n').map((l) => l.trim()).filter(Boolean);
+      const archiveRows = archiveData.split('\n').map(normaliseRow).filter(Boolean);
       const archiveRowSet = new Set(archiveRows);
       const bothEmpty = !archiveData.trim() && !recentData.trim();
       const distinct = archiveData !== recentData;
+
+      // The server's confirmation is required on EVERY path. A differing
+      // export is not proof of the archive on its own: a different PAGE of the
+      // recent table also differs, and the server's own answer about which tab
+      // it selected is what rules that out.
+      if (!serverConfirmed) {
+        attempts.push(
+          `archive[${variant.name}]: the server did not confirm the archive tab switch ` +
+            `(${describeTabState(tabState)}) — a differing export is not proof of the archive`
+        );
+        continue;
+      }
 
       if (bothEmpty) {
         // Two empty exports are identical whichever tab was selected, so the
         // row comparison cannot tell a genuinely empty archive from a switch
         // that never happened. The server can: it says which tab it selected
         // and which panel it left visible.
-        if (!serverConfirmed) {
-          console.error(
-            `${label}: both views exported zero rows and the server did not confirm the archive tab ` +
-              `switch (${describeTabState(tabState)}). With no data on either side, the archive tab ` +
-              'switch cannot be independently confirmed — recorded as an empty listing, not as a ' +
-              'verified archive.'
-          );
-          attempts.push(
-            `archive[${variant.name}]: both views exported zero rows and the server did not confirm ` +
-              `the tab switch (${describeTabState(tabState)}) — an empty listing is not a verified archive`
-          );
-          continue;
-        }
         got = candidate;
         csvCommand = candidate.commandId;
         verificationBasis = 'server-tab-state';

@@ -149,5 +149,18 @@ test('the apply phase performs exactly ONE database write', () => {
     writes.length, 1,
     `the apply phase must write in ONE operation, found ${writes.length} writes`
   );
+  // One call site is not enough on its own: a call inside a loop would still
+  // execute several times. The write has to sit at the function's top level,
+  // so its brace depth is the function body's own depth.
+  const writeAt = applyFn.indexOf('d1File(');
+  let depth = 0;
+  for (let i = 0; i < writeAt; i++) {
+    if (applyFn[i] === '{') depth += 1;
+    else if (applyFn[i] === '}') depth -= 1;
+  }
+  assert.equal(
+    depth, 1,
+    'the database write must be a top-level statement in the apply phase, not inside a loop'
+  );
   assert.match(applyFn, /in ONE D1 operation/);
 });
