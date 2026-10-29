@@ -31,7 +31,7 @@ function safeUrl(url) {
     const u = new URL(url);
     // The portal carries its session id as a PATH segment, after a semicolon
     // ("breach_report_hip.jsf;jsessionid=..."), not in the query string.
-    const path = u.pathname.replace(/;jsessionid=[^/]*/gi, '');
+    const path = u.pathname.replace(/;jsessionid=[^/;]*/gi, '');
     return `${u.origin}${path}`;
   } catch {
     return null;
@@ -52,18 +52,16 @@ function sha256(text) {
  */
 function redact(text) {
   return String(text)
-    .replace(/;jsessionid=[^;"'&\s]*/gi, '')
-    .replace(/([?&]jsessionid=)[^&"'\s]*/gi, '$1');
+    .replace(/;jsessionid=[^/;?&#<>"'\s]*/gi, '')
+    .replace(/([?&]jsessionid=)[^&#<>"'\s]*/gi, '$1');
 }
 
 /** Every string in the export steps, with any session id removed. */
 function redactSteps(steps) {
-  if (!steps || typeof steps !== 'object') return steps || null;
-  const out = {};
-  for (const [k, v] of Object.entries(steps)) {
-    out[k] = typeof v === 'string' ? redact(v) : v;
-  }
-  return out;
+  if (typeof steps === 'string') return redact(steps);
+  if (Array.isArray(steps)) return steps.map(redactSteps);
+  if (!steps || typeof steps !== 'object') return steps ?? null;
+  return Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, redactSteps(v)]));
 }
 
 function runContext(env = process.env) {
@@ -188,5 +186,7 @@ module.exports = {
   buildAppliedReceipt,
   runContext,
   safeUrl,
+  redact,
+  redactSteps,
   sha256,
 };

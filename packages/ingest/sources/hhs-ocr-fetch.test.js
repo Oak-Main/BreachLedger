@@ -181,7 +181,7 @@ const TABBED_GRID = `<html><form id="ocrForm" action="/ocr/breach/breach_report_
 // archive tab's own exporter and a fresh ViewState.
 const ARCHIVE_PARTIAL =
   '<?xml version="1.0"?><partial-response><changes>' +
-  '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+  '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
   '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
   '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
   '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -196,7 +196,7 @@ const ARCHIVE_PARTIAL =
 // server's own answer is consulted.
 const UNCONFIRMED_PARTIAL =
   '<?xml version="1.0"?><partial-response><changes>' +
-  '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+  '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
   '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="0">' +
   '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
   '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -365,7 +365,7 @@ function emptyViewsPortal({ switchPartial = ARCHIVE_PARTIAL } = {}) {
     const body = String(opts.body || '');
     if ((opts.method || 'GET') === 'GET') return { body: grid, checksum: 'g', retrieved_at: 'T' };
     if (body.includes('tabChange') || body.includes('_activeIndex=1')) {
-      return { body: switchPartial, checksum: 'p', retrieved_at: 'T' };
+      return { body: switchPartial.replace('<img alt="CSV"', '<span class="ui-datatable-empty-message">No records found.</span><img alt="CSV"'), checksum: 'p', retrieved_at: 'T' };
     }
     return { body: exports++ === 0 ? EMPTY : EMPTY2, checksum: `c${exports}`, retrieved_at: 'T' };
   };
@@ -431,7 +431,7 @@ test('a differing export is refused when the server did not confirm the switch',
   // row comparison can stand in for the server's own answer.
   const hiddenPanel =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -480,7 +480,7 @@ test('a switch whose signals contradict each other is refused', async () => {
   // nothing.
   const contradictory =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -500,7 +500,7 @@ test('a response that does not show the archive panel cannot confirm the switch'
   // nothing independent to confirm on.
   const noPanel =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
     '<img alt="CSV" src="/i/csv.png"></a></div>]]></update>' +
@@ -537,7 +537,7 @@ test('an ambiguous response with two exporters, neither of which passes, is refu
   // than one of them being picked.
   const twoExporters =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -568,7 +568,7 @@ test('a wrong-panel exporter is rejected while a correct one is accepted', async
   // one must not become the archive.
   const twoExporters =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -753,4 +753,251 @@ test('a retrieval failure produces no instant at all', async () => {
     () => fetchBreachCsv({ fetchImpl: impl }),
     /could not obtain the CSV export by any path or encoding/,
   );
+});
+
+// Stateful regression portal: every GET creates different generated ids and a
+// new cookie-bound ViewState. A request on a consumed session is a test failure.
+function recoveryPortal({ fail = 'timeout', alwaysFail = false, shellOnly = false, unconfirmedAfterRetry = false } = {}) {
+  const sessions = new WeakMap();
+  const calls = [];
+  let serial = 0;
+  let failures = 0;
+  const reply = (body, n) => ({ body, checksum: `csv-${n}`, retrieved_at: `T-${n}`, final_url: GRID_PAGE });
+  const impl = async (url, opts = {}) => {
+    const body = String(opts.body || '');
+    if ((opts.method || 'GET') === 'GET') {
+      const n = ++serial;
+      sessions.set(opts.jar, { n, token: `GRID-${n}`, archive: false, consumed: false });
+      return reply(TABBED_GRID.replaceAll('j_idt31', `j_idt${100 + n}`).replaceAll('j_idt400', `j_idt${600 + n}`).replace('VS-GRID', `GRID-${n}`), n);
+    }
+    const state = sessions.get(opts.jar);
+    assert.ok(state, 'a POST must belong to its grid session');
+    assert.equal(state.consumed, false, 'never reuse the state after a timed-out or changed response');
+    assert.ok(body.includes(state.token), `POST must use the latest token ${state.token}`);
+    calls.push({ n: state.n, body, timeout: opts.timeoutMs });
+    if (body.includes('tabChange') || body.includes('_activeIndex=1')) {
+      state.archive = true;
+      state.token = `ARCHIVE-${state.n}`;
+      let html = unconfirmedAfterRetry && failures ? UNCONFIRMED_PARTIAL : ARCHIVE_PARTIAL;
+      html = html.replaceAll('j_idt31', `j_idt${100 + state.n}`).replaceAll('j_idt500', `j_idt${700 + state.n}`).replace('VS-ARCHIVE', state.token);
+      if (shellOnly && body.includes('tabChange')) {
+        state.consumed = true;
+        html = html.replace(/<a\b[\s\S]*?<\/a>/, '');
+      }
+      return reply(html, state.n);
+    }
+    const expectedId = `j_idt${(state.archive ? 700 : 600) + state.n}`;
+    assert.ok(body.includes(expectedId), `POST must rediscover the exporter ${expectedId}`);
+    if (state.archive && (alwaysFail || failures === 0)) {
+      failures++;
+      state.consumed = true;
+      if (fail === 'timeout') throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      if (fail === 'redirect') return reply('<partial-response><redirect url="/ocr/breach/breach_report_hip.jsf"/></partial-response>', state.n);
+      return reply(TABBED_GRID.replace('VS-GRID', `CHANGED-${state.n}`), state.n);
+    }
+    return reply(state.archive ? ARCHIVE_CSV : CSV, state.n);
+  };
+  return { impl, calls, failures: () => failures };
+}
+
+test('archive export timeout restarts the full snapshot with fresh session, ViewState and exporter ids', async () => {
+  const portal = recoveryPortal();
+  const views = await fetchAllViews({ fetchImpl: portal.impl });
+  assert.equal(views[1].csv, ARCHIVE_CSV);
+  assert.equal(views[1].steps.sessionAttempt, 2);
+  assert.equal(views[1].steps.recoveredSessions.length, 1);
+  assert.equal(views[1].checksum, 'csv-4');
+  const timedOut = portal.calls.filter(c => c.n === 2 && !c.body.includes('tabChange'));
+  assert.equal(timedOut.length, 1, 'do not try alternate encodings after a transport failure');
+  assert.equal(timedOut[0].timeout, 90_000, 'large CSV exports have a bounded 90-second budget');
+});
+
+test('persistent export timeouts exhaust two sessions and refuse full coverage', async () => {
+  const portal = recoveryPortal({ alwaysFail: true });
+  await assert.rejects(() => fetchAllViews({ fetchImpl: portal.impl }), /timeout/);
+  assert.equal(portal.failures(), 2);
+});
+
+test('a successful retry still refuses an unconfirmed archive selection', async () => {
+  const portal = recoveryPortal({ unconfirmedAfterRetry: true });
+  await assert.rejects(() => fetchAllViews({ fetchImpl: portal.impl }), /did not confirm the archive tab switch/);
+});
+
+for (const fail of ['redirect', 'changed-view']) {
+  test(`archive ${fail} response discards old form state before retry`, async () => {
+    const portal = recoveryPortal({ fail });
+    const views = await fetchAllViews({ fetchImpl: portal.impl });
+    assert.equal(views[1].csv, ARCHIVE_CSV);
+    assert.equal(views[1].steps.sessionAttempt, 2);
+    assert.equal(portal.failures(), 1);
+  });
+}
+
+test('plain-postback fallback rediscovers ids and ViewState after an AJAX shell-only response', async () => {
+  const portal = recoveryPortal({ shellOnly: true });
+  const views = await fetchAllViews({ fetchImpl: portal.impl });
+  assert.equal(views[1].steps.path, 'archive[plain-postback]');
+  assert.equal(views[1].steps.csvCommand, 'ocrForm:j_idt706');
+});
+
+test('an archive-only empty grid is accepted alongside nonempty recent data', async () => {
+  const { impl } = mockTabbedPortal();
+  const fetchImpl = async (url, opts) => {
+    const res = await impl(url, opts);
+    if (res.body === ARCHIVE_PARTIAL) res.body = res.body.replace('<img alt="CSV"', '<span class="ui-datatable-empty-message">No records found.</span><img alt="CSV"');
+    if (res.body === ARCHIVE_CSV) res.body = 'Name of Covered Entity,State\n';
+    return res;
+  };
+  const views = await fetchAllViews({ fetchImpl });
+  assert.equal(views[1].gridReportsEmpty, true);
+  assert.equal(views[1].archiveVerificationBasis, 'server-tab-state');
+  assert.equal(dataRowsOf(views[1].csv), '');
+});
+
+test('a header-only export without an empty archive grid is refused even when selected', async () => {
+  const { impl } = mockTabbedPortal();
+  const fetchImpl = async (url, opts) => {
+    const res = await impl(url, opts);
+    return res.body === ARCHIVE_CSV ? { ...res, body: 'Name of Covered Entity,State\n' } : res;
+  };
+  await assert.rejects(() => fetchAllViews({ fetchImpl }), /empty export without an unambiguous empty archive grid/);
+});
+
+test('report identity permits the portal session path parameter while rejecting other reports and origins', () => {
+  const { assertGridIdentity } = require('./hhs-ocr-fetch');
+  assert.doesNotThrow(() => assertGridIdentity(GRID_PAGE, { body: GRID, final_url: `${GRID_PAGE};jsessionid=SECRET` }, 'hhs_ocr'));
+  assert.throws(() => assertGridIdentity(GRID_PAGE, { body: GRID, final_url: `${PART2_GRID_PAGE};jsessionid=SECRET` }, 'hhs_ocr'), /Refusing to ingest/);
+  assert.throws(() => assertGridIdentity(GRID_PAGE, { body: GRID, final_url: GRID_PAGE.replace('ocrportal.hhs.gov', 'example.org') }, 'hhs_ocr'), /Refusing to ingest/);
+});
+
+test('the tab-change request refreshes the portal-declared results table as well as server tab state', async () => {
+  const grid = TABBED_GRID.replace('</html>', `<script>PrimeFaces.ab({s:"ocrForm:j_idt31",e:"tabChange",u:"ocrForm:rotatedResults ocrForm:rotatedSummary"});</script></html>`);
+  const { impl } = mockTabbedPortal({ tabbed: grid });
+  let observed = false;
+  const wrapped = async (url, opts = {}) => {
+    if (String(opts.body).includes('tabChange')) {
+      const posted = new URLSearchParams(opts.body);
+      assert.equal(posted.get('javax.faces.partial.render'), 'ocrForm:j_idt31 ocrForm:rotatedResults ocrForm:rotatedSummary');
+      observed = true;
+    }
+    return impl(url, opts);
+  };
+  const views = await fetchAllViews({ fetchImpl: wrapped });
+  assert.equal(observed, true);
+  assert.equal(views[1].archiveVerification, 'verified');
+});
+
+test('current-view export timeouts also retry from a fresh uncached grid', async () => {
+  const { impl } = mockPortal();
+  let grids = 0;
+  let posts = 0;
+  const wrapped = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'GET') {
+      grids++;
+      assert.equal(opts.headers['Cache-Control'], 'no-cache');
+    } else if (++posts === 1) {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }
+    return impl(url, opts);
+  };
+  const view = await fetchBreachCsv({ fetchImpl: wrapped });
+  assert.equal(view.csv, CSV);
+  assert.equal(view.steps.sessionAttempt, 2);
+  assert.equal(grids, 2);
+  assert.equal(posts, 2);
+});
+
+test('redirected CSV is refused before format acceptance and cannot masquerade as the archive', async () => {
+  const { impl } = mockTabbedPortal();
+  let redirected = 0;
+  const wrapped = async (url, opts) => {
+    const res = await impl(url, opts);
+    if (res.body === ARCHIVE_CSV) {
+      redirected++;
+      return { ...res, redirected: true, final_url: PART2_GRID_PAGE };
+    }
+    return res;
+  };
+  await assert.rejects(() => fetchAllViews({ fetchImpl: wrapped }), /export followed a redirect/);
+  assert.equal(redirected, 2, 'retry is bounded to two sessions');
+});
+
+test('CSV from the wrong endpoint is refused even without a redirect flag', async () => {
+  const { impl } = mockTabbedPortal();
+  const wrapped = async (url, opts) => {
+    const res = await impl(url, opts);
+    return res.body === ARCHIVE_CSV ? { ...res, final_url: PART2_GRID_PAGE } : res;
+  };
+  await assert.rejects(() => fetchAllViews({ fetchImpl: wrapped }), /different report or origin/);
+});
+
+test('a grid GET timeout retries with a fresh session while validation failures stay fatal', async () => {
+  const { impl } = mockPortal();
+  let gets = 0;
+  const wrapped = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'GET' && gets++ === 0) throw new DOMException('grid timeout', 'TimeoutError');
+    return impl(url, opts);
+  };
+  assert.equal((await fetchBreachCsv({ fetchImpl: wrapped })).steps.sessionAttempt, 2);
+  assert.equal(gets, 2);
+  let invalidGets = 0;
+  await assert.rejects(() => fetchBreachCsv({ fetchImpl: async () => { invalidGets++; return { body: '<html>wrong report</html>' }; } }), /does not identify itself/);
+  assert.equal(invalidGets, 1);
+});
+
+for (const redirected of [false, true]) {
+  test(`fallback navigation refuses the wrong report before using its exporter (redirected=${redirected})`, async () => {
+    const { impl } = mockPortal({ directGrid: '<html>Covered Entity chrome only, no exporter</html>', navGrid: PART2_GRID, stamps: { nav: { checksum: 'wrong', retrieved_at: 'T', redirected, final_url: PART2_GRID_PAGE } } });
+    await assert.rejects(() => fetchBreachCsv({ fetchImpl: impl }), redirected ? /navigation returned a redirect/ : /response came from|does not identify itself/);
+  });
+}
+
+test('a partial archive response cannot change the legal report at the same URL', async () => {
+  const wrong = ARCHIVE_PARTIAL.replace('Name of Covered Entity', 'Name of Part 2 Program');
+  const { impl } = mockTabbedPortal({ archivePartial: wrong });
+  let archiveExports = 0;
+  const wrapped = async (url, opts = {}) => {
+    if (String(opts.body).includes('j_idt500')) archiveExports++;
+    return impl(url, opts);
+  };
+  await assert.rejects(() => fetchAllViews({ fetchImpl: wrapped }), /does not identify itself as the expected report/);
+  assert.equal(archiveExports, 0, 'never export a partial update from the wrong report');
+});
+
+test('a partial archive table with no report identity fails closed', async () => {
+  const { impl } = mockTabbedPortal({ archivePartial: ARCHIVE_PARTIAL.replace('Name of Covered Entity', 'Unknown report') });
+  await assert.rejects(() => fetchAllViews({ fetchImpl: impl }), /does not identify itself as the expected report/);
+});
+
+test('a report cannot send its session to another report or origin through a changed form action', async () => {
+  for (const action of [PART2_GRID_PAGE, 'https://example.org/ocr/breach/breach_report_hip.jsf']) {
+    const grid = GRID.replace('action="/ocr/breach/breach_report_hip.jsf"', `action="${action}"`);
+    const { impl, calls } = mockPortal({ directGrid: grid });
+    await assert.rejects(() => fetchBreachCsv({ fetchImpl: impl }), /form action targets a different report or origin/);
+    assert.equal(calls.some(c => c.method === 'POST'), false);
+  }
+});
+
+test('fallback front-page form actions are validated before transmitting the session', async () => {
+  for (const action of ['https://example.org/steal', PART2_GRID_PAGE]) {
+    const frontBody = FRONT.replace('/ocr/breach/breach_report.jsf;jsessionid=ABC', action);
+    const { impl, calls } = mockPortal({ directGrid: '<html>Covered Entity chrome only</html>', frontBody });
+    await assert.rejects(() => fetchBreachCsv({ fetchImpl: impl }), /front-page form action targets a different path or origin/);
+    assert.equal(calls.some(c => c.method === 'POST'), false);
+  }
+});
+
+test('explicit current coverage returns only current data and never requests archive selection', async () => {
+  const { impl, calls } = mockTabbedPortal();
+  const views = await fetchAllViews({ fetchImpl: impl, coverage: 'current' });
+  assert.deepEqual(views.map(v => v.view), ['under_investigation']);
+  assert.equal(views[0].csv, CSV);
+  assert.equal(calls.length, 2, 'only the current grid and its export may be fetched');
+  assert.equal(calls.some(c => c.body.includes('tabChange') || c.body.includes('_activeIndex=1')), false);
+});
+
+test('unknown coverage fails before requesting any source data', async () => {
+  let calls = 0;
+  await assert.rejects(() => fetchAllViews({ coverage: 'unknown', fetchImpl: async () => { calls++; } }), /coverage must be all or current/);
+  assert.equal(calls, 0);
 });

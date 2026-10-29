@@ -46,7 +46,7 @@ function findTabId(html, labelPattern) {
  * PrimeFaces sends the new index in <tabview>_newTab / _tabindex and mirrors it
  * into the activeIndex hidden field.
  */
-function buildTabChangeFields(hidden, tabView, tabIndex, tabClientId) {
+function buildTabChangeFields(hidden, tabView, tabIndex, tabClientId, renderTargets = []) {
   return {
     ...hidden,
     ocrForm: 'ocrForm',
@@ -57,9 +57,27 @@ function buildTabChangeFields(hidden, tabView, tabIndex, tabClientId) {
     'javax.faces.partial.event': 'tabChange',
     'javax.faces.behavior.event': 'tabChange',
     'javax.faces.partial.execute': tabView.id,
-    'javax.faces.partial.render': tabView.id,
+    'javax.faces.partial.render': [...new Set([tabView.id, ...renderTargets])].join(' '),
     'javax.faces.partial.ajax': 'true',
   };
+}
+
+/** Read the tabChange handler's render targets from this render's widget.
+ * The live portal updates its results OUTSIDE the TabView. Rendering just the
+ * tab shell confirms selection but supplies neither the refreshed table nor
+ * its exporter. Do not hardcode HHS's component ids or evaluate its scripts.
+ */
+function findTabChangeRenderTargets(html, tabView) {
+  if (!tabView) return [];
+  for (const script of String(html).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)) {
+    for (const match of script[1].matchAll(/PrimeFaces\.ab\(\{([^{}]+)/g)) {
+      const field = (key) => new RegExp(`(?:^|,)\\s*${key}\\s*:\\s*(["'])(.*?)\\1`).exec(match[1])?.[2];
+      if (field('s') === tabView.id && field('e') === 'tabChange') {
+        return (field('u') || '').split(/\s+/).filter(Boolean);
+      }
+    }
+  }
+  return [];
 }
 
 /**
@@ -186,6 +204,7 @@ module.exports = {
   findTabId,
   findTabIndex,
   buildTabChangeFields,
+  findTabChangeRenderTargets,
   buildTabPostbackFields,
   extractPartialResponse,
   mergeViewState,

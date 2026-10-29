@@ -43,7 +43,7 @@ const SOURCES = {
 const { validate, logReject } = require('./validate');
 const { assignSlugs } = require('./slug');
 const { buildStatements, batch } = require('./d1-writer');
-const { buildManifest, buildAppliedReceipt } = require('./manifest');
+const { buildManifest, buildAppliedReceipt, redact, runContext } = require('./manifest');
 const { score } = require('../severity/score');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -84,6 +84,20 @@ function d1File(sql, remote) {
   }
 }
 
+function stagedBatchPath(dir, name) {
+  const root = path.resolve(dir);
+  if (typeof name !== 'string' || !name || path.isAbsolute(name) ||
+      /[\\/]/.test(name) || path.basename(name) !== name) {
+    throw new Error(`ingest: refusing batch path outside stage: ${name}`);
+  }
+  const file = path.resolve(root, name);
+  if (path.dirname(file) !== root ||
+      (fs.existsSync(file) && path.dirname(fs.realpathSync(file)) !== fs.realpathSync(root))) {
+    throw new Error(`ingest: refusing batch path outside stage: ${name}`);
+  }
+  return file;
+}
+
 /**
  * Write the statements that --stage validated.
  *
@@ -97,6 +111,9 @@ function applyStaged(dir, remote, expectSources) {
   const manifests = fs.readdirSync(dir).filter((f) => f.endsWith('.manifest.json')).sort();
   const staged = manifests.map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
   const stagedSources = staged.map((m) => m.source);
+  if (new Set(stagedSources).size !== stagedSources.length || stagedSources.some((s) => !Object.hasOwn(SOURCES, s))) {
+    throw new Error('ingest: refusing duplicate or unregistered staged sources');
+  }
 
   if (expectSources && expectSources.length) {
     const missing = expectSources.filter((s) => !stagedSources.includes(s));
@@ -105,6 +122,10 @@ function applyStaged(dir, remote, expectSources) {
         `ingest: refusing to apply the stage: no validated data staged for source(s) ` +
           `${missing.join(', ')} (staged: ${stagedSources.join(', ') || 'none'})`
       );
+    }
+    const unexpected = stagedSources.filter((s) => !expectSources.includes(s));
+    if (unexpected.length) {
+      throw new Error(`ingest: refusing unexpected staged source(s): ${unexpected.join(', ')}`);
     }
   }
   if (!manifests.length) {
@@ -119,7 +140,7 @@ function applyStaged(dir, remote, expectSources) {
   const files = [];
   for (const m of staged) {
     for (const batch of m.batches || []) {
-      const file = path.join(dir, batch);
+      const file = stagedBatchPath(dir, batch);
       if (!fs.existsSync(file)) {
         throw new Error(
           `ingest: refusing to apply the stage: the staged batch ${batch} for source ` +
@@ -136,6 +157,56 @@ function applyStaged(dir, remote, expectSources) {
       `ingest: refusing to apply the stage: ${stray.length} file(s) in ${dir} are listed by no ` +
         `manifest (${stray.join(', ')}); they may belong to an earlier stage`
     );
+  }
+
+  // Verify every staged batch against the digest the manifest recorded when
+  // it was staged. An edited or corrupted staged file must never be
+  // applied, even though the receipt would merely report the difference
+  // afterwards.
+  for (const m of staged) {
+    // The durable manifest is re-hashed here rather than trusted: the receipt
+    // must not be able to name a manifest that has changed since it was
+    // staged.
+    const dm = m.durable_manifest;
+    if (!dm || typeof dm.file !== 'string' || !dm.file || !/^[a-f0-9]{64}$/.test(dm.sha256 || '')) {
+      throw new Error(`ingest: refusing to apply the stage: source ${m.source} has no valid durable-manifest reference`);
+    }
+    {
+      const actualManifest = fs.existsSync(dm.file)
+        ? require('crypto').createHash('sha256').update(fs.readFileSync(dm.file)).digest('hex')
+        : null;
+      if (actualManifest !== dm.sha256) {
+        throw new Error(
+          `ingest: refusing to apply the stage: the durable manifest ${dm.file} does not match ` +
+            `the digest recorded at staging time (expected ${dm.sha256}, got ${actualManifest})`
+        );
+      }
+    }
+    const durable = JSON.parse(fs.readFileSync(dm.file, 'utf8'));
+    const digests = m.batch_digests;
+    const publishedBatches = durable.staged?.batches;
+    const canonical = (items) => items.map(({ file, sha256, bytes }) => ({ file, sha256, bytes }));
+    if (durable.schema !== 'breachledger/ingest-manifest@1' ||
+        durable.source?.id !== m.source || durable.source?.coverage !== m.coverage ||
+        durable.source?.dry_run !== false || durable.write?.statements !== m.statements ||
+        !Array.isArray(digests) || !Array.isArray(publishedBatches) ||
+        JSON.stringify(canonical(digests)) !== JSON.stringify(canonical(publishedBatches)) ||
+        JSON.stringify(digests.map((d) => d.file)) !== JSON.stringify(m.batches) ||
+        digests.some((d) => !/^[a-f0-9]{64}$/.test(d.sha256 || '') || !Number.isSafeInteger(d.bytes) || d.bytes < 0)) {
+      throw new Error(`ingest: refusing to apply the stage: source ${m.source} does not match its validated durable manifest`);
+    }
+    for (const d of digests) {
+      const full = stagedBatchPath(dir, d.file);
+      const actual = fs.existsSync(full)
+        ? require('crypto').createHash('sha256').update(fs.readFileSync(full)).digest('hex')
+        : null;
+      if (actual !== d.sha256) {
+        throw new Error(
+          `ingest: refusing to apply the stage: the staged batch ${d.file} does not match the ` +
+            `digest recorded in the manifest (expected ${d.sha256}, got ${actual})`
+        );
+      }
+    }
   }
 
   if (!files.length) {
@@ -164,39 +235,6 @@ function applyStaged(dir, remote, expectSources) {
   // database is left holding a partial ingest that no rollback undoes. One
   // execution is one operation, so the stage is applied or it is not.
   const combined = files.map((f) => fs.readFileSync(f.file, 'utf8')).join('\n');
-  // Verify every staged batch against the digest the manifest recorded when
-  // it was staged. An edited or corrupted staged file must never be
-  // applied, even though the receipt would merely report the difference
-  // afterwards.
-  for (const m of staged) {
-    // The durable manifest is re-hashed here rather than trusted: the receipt
-    // must not be able to name a manifest that has changed since it was
-    // staged.
-    const dm = m.durable_manifest;
-    if (dm && dm.file) {
-      const actualManifest = fs.existsSync(dm.file)
-        ? require('crypto').createHash('sha256').update(fs.readFileSync(dm.file)).digest('hex')
-        : null;
-      if (actualManifest !== dm.sha256) {
-        throw new Error(
-          `ingest: refusing to apply the stage: the durable manifest ${dm.file} does not match ` +
-            `the digest recorded at staging time (expected ${dm.sha256}, got ${actualManifest})`
-        );
-      }
-    }
-    for (const d of m.batch_digests || []) {
-      const full = path.join(dir, d.file);
-      const actual = fs.existsSync(full)
-        ? require('crypto').createHash('sha256').update(fs.readFileSync(full)).digest('hex')
-        : null;
-      if (actual !== d.sha256) {
-        throw new Error(
-          `ingest: refusing to apply the stage: the staged batch ${d.file} does not match the ` +
-            `digest recorded in the manifest (expected ${d.sha256}, got ${actual})`
-        );
-      }
-    }
-  }
 
   console.error(
     `ingest: applying ${files.length} staged batch(es) from ${dir} in ONE D1 operation ` +
@@ -216,7 +254,7 @@ function applyStaged(dir, remote, expectSources) {
       statements: m.statements,
       durable_manifest: m.durable_manifest || null,
       applied_batches: (m.batches || []).map((b) => {
-        const full = path.join(dir, b);
+        const full = stagedBatchPath(dir, b);
         return {
           file: b,
           sha256: fs.existsSync(full)
@@ -324,8 +362,9 @@ async function main() {
     }];
     console.error(`ingest: reading ${fromFile} (${text.length} bytes) instead of fetching`);
   } else {
-    console.error('ingest: driving the HHS OCR portal export sequence (both views)...');
+    console.error(`ingest: driving the HHS OCR portal export sequence (${coverage === 'current' ? 'current view' : 'both views'})...`);
     views = await fetchAllViews({
+      coverage,
       requireArchive: coverage !== 'current',
       gridPage: selected.gridPage,
       label: sourceId,
@@ -554,6 +593,22 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`ingest FAILED: ${err.message}`);
+  // Fetch failures happen before a validated manifest exists. Retain a small,
+  // sanitised failure receipt too; it is never an applied-data receipt.
+  const sourceId = arg('source', 'hhs_ocr');
+  if (!arg('apply') && SOURCES[sourceId]) {
+    const dir = arg('manifest-dir',
+      process.env.INGEST_MANIFEST_DIR || path.join(require('os').tmpdir(), 'breachledger-ingest-manifest'));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${sourceId}.failure.json`), JSON.stringify({
+      schema: 'breachledger/ingest-failure@1',
+      run: runContext(),
+      source: sourceId,
+      coverage: arg('coverage', 'all'),
+      failed_at: new Date().toISOString(),
+      error: redact(err.message),
+    }, null, 2) + '\n');
+  }
+  console.error(`ingest FAILED: ${redact(err.message)}`);
   process.exit(1);
 });

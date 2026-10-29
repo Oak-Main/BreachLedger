@@ -171,3 +171,22 @@ test('a reordered TabView reports the archive at its new index', () => {
     '</ul>';
   assert.equal(tv.findTabIndex(html, 'ocrForm:j_idt31:archiveTab'), 0);
 });
+
+test('discovers the live tabChange results render targets alongside the selected tab shell', () => {
+  const { findTabChangeRenderTargets, buildTabChangeFields } = require('./hhs-tabview');
+  const tab = { id: 'ocrForm:j_idt912', field: 'ocrForm:j_idt912_activeIndex' };
+  const html = `<script>PrimeFaces.ab({s:"other:widget",e:"tabChange",u:"wrong:table"});</script>
+    <script>PrimeFaces.cw("TabView","widget",{behaviors:{tabChange:function(){PrimeFaces.ab({s:"ocrForm:j_idt912",e:"tabChange",f:"ocrForm",p:"ocrForm:j_idt912",u:"ocrForm:breachReports ocrForm:results",onst:function(cfg){wait.show();}});}}});</script>`;
+  const targets = findTabChangeRenderTargets(html, tab);
+  assert.deepEqual(targets, ['ocrForm:breachReports', 'ocrForm:results']);
+  const fields = buildTabChangeFields({}, tab, 1, `${tab.id}:archiveTab`, targets);
+  assert.equal(fields['javax.faces.partial.render'], 'ocrForm:j_idt912 ocrForm:breachReports ocrForm:results');
+  assert.deepEqual(findTabChangeRenderTargets('<script>PrimeFaces.ab({s:"other",e:"tabChange",u:"other:results"})</script>', tab), []);
+});
+
+test('render-target discovery accepts whitespace in a script closing tag', () => {
+  const { findTabChangeRenderTargets } = require('./hhs-tabview');
+  for (const end of ['</script >', '</script\t\n bar>', '</SCRIPT data-ignored="value">', '</script/>']) {
+    assert.deepEqual(findTabChangeRenderTargets(`<script>PrimeFaces.ab({s:"form:tabs",e:"tabChange",u:"form:records"});${end}`, { id: 'form:tabs' }), ['form:records']);
+  }
+});
