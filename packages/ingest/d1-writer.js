@@ -88,7 +88,12 @@ function buildStatements(records, existingBreaches, existingSourceKeys, now) {
         ` ON CONFLICT(id) DO UPDATE SET ${CONTENT_COLUMNS.map((c) => `${c} = excluded.${c}`).join(', ')}, ` +
         // first_seen_at is the row's original observation and is NOT
         // overwritten: a re-applied stage must not rewrite it.
-        `updated_at = excluded.updated_at;`
+        `updated_at = excluded.updated_at` +
+        // A stage that is OLDER than what the database holds must not roll
+        // the row back. A plain INSERT used to fail loudly here; the upsert
+        // would have overwritten silently, so the conflict branch carries
+        // its own staleness guard.
+        ` WHERE excluded.updated_at >= breaches.updated_at;`
       );
       stats.inserted++;
     } else if (recordChanged(rec, existing)) {
@@ -108,7 +113,8 @@ function buildStatements(records, existingBreaches, existingSourceKeys, now) {
       const row = { ...src, breach_id: rec.id };
       statements.push(
         `INSERT INTO sources (${SOURCE_COLUMNS.join(', ')}) VALUES (${SOURCE_COLUMNS.map((c) => sqlLiteral(row[c])).join(', ')})` +
-        ` ON CONFLICT(id) DO UPDATE SET ${SOURCE_COLUMNS.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ')};`
+        ` ON CONFLICT(id) DO UPDATE SET ${SOURCE_COLUMNS.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ')}` +
+        ` WHERE excluded.retrieved_at >= sources.retrieved_at;`
       );
       stats.sourcesAdded++;
     }

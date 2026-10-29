@@ -116,6 +116,22 @@ test('the insert statements are idempotent, so a partially applied stage can be 
   assert.match(sourceInsert, /ON CONFLICT\(id\) DO UPDATE SET/);
 });
 
+test('a stale stage must not roll back newer content', () => {
+  // The upsert makes a re-applied stage converge, but it must not let a stage
+  // that is OLDER than the database overwrite newer rows. A plain INSERT used
+  // to fail loudly here; the upsert carries its own staleness guard instead.
+  const { statements } = buildStatements(
+    [rec({ sources: [{ id: 's1', source_type: 'hhs_ocr', source_url: 'https://x.gov/a', retrieved_at: NOW, checksum: 'c' }] })],
+    new Map(), new Set(), NOW
+  );
+  const insert = statements.find((s) => s.startsWith('INSERT INTO breaches'));
+  assert.ok(insert, 'a new breach must emit an insert');
+  assert.match(insert, /WHERE excluded\.updated_at >= breaches\.updated_at/);
+  const sourceInsert = statements.find((s) => s.startsWith('INSERT INTO sources'));
+  assert.ok(sourceInsert, 'a new source row must emit an insert');
+  assert.match(sourceInsert, /WHERE excluded\.retrieved_at >= sources\.retrieved_at/);
+});
+
 test('the upsert never rewrites first_seen_at', () => {
   // first_seen_at is the row's original observation. Re-applying a stage
   // must not move it, or a recovery would silently restate history.

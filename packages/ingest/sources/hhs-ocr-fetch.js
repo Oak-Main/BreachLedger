@@ -229,6 +229,9 @@ async function fetchBreachCsv({ fetchImpl = politeFetch, gridPage = GRID_PAGE, l
       bytes: result.csv.body.length,
       checksum: result.csv.checksum,
       retrieved_at: result.csv.retrieved_at,
+      // The export response's final URL, so the manifest can record which
+      // document was actually fetched.
+      final_url: result.csv.final_url,
       attemptsBeforeSuccess: attempts.length,
     },
   };
@@ -276,7 +279,7 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
     checksum: current.steps.checksum,
     retrieved_at: current.steps.retrieved_at,
     requested_url: gridPage,
-    final_url_safe: safeUrl(current.final_url),
+    final_url_safe: safeUrl(current.steps.final_url),
     gridReportsEmpty: current.gridReportsEmpty,
     steps: current.steps,
   });

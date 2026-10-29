@@ -169,6 +169,21 @@ function applyStaged(dir, remote, expectSources) {
   // applied, even though the receipt would merely report the difference
   // afterwards.
   for (const m of staged) {
+    // The durable manifest is re-hashed here rather than trusted: the receipt
+    // must not be able to name a manifest that has changed since it was
+    // staged.
+    const dm = m.durable_manifest;
+    if (dm && dm.file) {
+      const actualManifest = fs.existsSync(dm.file)
+        ? require('crypto').createHash('sha256').update(fs.readFileSync(dm.file)).digest('hex')
+        : null;
+      if (actualManifest !== dm.sha256) {
+        throw new Error(
+          `ingest: refusing to apply the stage: the durable manifest ${dm.file} does not match ` +
+            `the digest recorded at staging time (expected ${dm.sha256}, got ${actualManifest})`
+        );
+      }
+    }
     for (const d of m.batch_digests || []) {
       const full = path.join(dir, d.file);
       const actual = fs.existsSync(full)
@@ -472,6 +487,15 @@ async function main() {
 
   const files = batch(statements, 400);
 
+  if (dryRun) {
+    // A dry run must return BEFORE anything is staged: the staged batch files
+    // are exactly what the apply phase would write, so a dry run that staged
+    // them would leave a complete applicable stage behind.
+    writeManifest({ batches: [], note: 'dry run: nothing was written' });
+    console.error('ingest: --dry-run, no writes performed');
+    return;
+  }
+
   if (stageDir) {
     // Stage the validated statements instead of writing them, so that no
     // source is written until every source has passed its coverage checks.
@@ -504,7 +528,7 @@ async function main() {
         stats,
         stagedAt: now,
         durable_manifest: durable
-          ? { file: path.basename(durable.file), sha256: durable.sha256 }
+          ? { file: durable.file, sha256: durable.sha256 }
           : null,
       }, null, 2),
       'utf8'
@@ -513,12 +537,6 @@ async function main() {
       `ingest: staged ${statements.length} statement(s) in ${written.length} batch(es) -> ${stageDir} ` +
         '(no D1 write in this phase)'
     );
-    return;
-  }
-
-  if (dryRun) {
-    writeManifest({ batches: [], note: 'dry run: nothing was written' });
-    console.error('ingest: --dry-run, no writes performed');
     return;
   }
 
