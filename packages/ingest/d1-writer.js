@@ -84,7 +84,9 @@ function buildStatements(records, existingBreaches, existingSourceKeys, now) {
     if (!existing) {
       const row = { ...rec, first_seen_at: now, updated_at: now };
       statements.push(
-        `INSERT INTO breaches (${ALL_COLUMNS.join(', ')}) VALUES (${ALL_COLUMNS.map((c) => sqlLiteral(row[c])).join(', ')});`
+        `INSERT INTO breaches (${ALL_COLUMNS.join(', ')}) VALUES (${ALL_COLUMNS.map((c) => sqlLiteral(row[c])).join(', ')})` +
+        ` ON CONFLICT(id) DO UPDATE SET ${CONTENT_COLUMNS.map((c) => `${c} = excluded.${c}`).join(', ')}, ` +
+        `first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at;`
       );
       stats.inserted++;
     } else if (recordChanged(rec, existing)) {
@@ -103,7 +105,8 @@ function buildStatements(records, existingBreaches, existingSourceKeys, now) {
       existingSourceKeys.add(key);
       const row = { ...src, breach_id: rec.id };
       statements.push(
-        `INSERT INTO sources (${SOURCE_COLUMNS.join(', ')}) VALUES (${SOURCE_COLUMNS.map((c) => sqlLiteral(row[c])).join(', ')});`
+        `INSERT INTO sources (${SOURCE_COLUMNS.join(', ')}) VALUES (${SOURCE_COLUMNS.map((c) => sqlLiteral(row[c])).join(', ')})` +
+        ` ON CONFLICT(id) DO UPDATE SET ${SOURCE_COLUMNS.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ')};`
       );
       stats.sourcesAdded++;
     }

@@ -98,3 +98,20 @@ test('batching splits statements into chunks', () => {
   assert.equal(files[0].split('\n').length, 400);
   assert.equal(files[2].split('\n').length, 150);
 });
+
+test('the insert statements are idempotent, so a partially applied stage can be re-applied', () => {
+  // The remote import path's all-or-nothing behaviour is not established, so
+  // the staged write must not DEPEND on it: re-applying the same stage has to
+  // converge on the same state. An upsert does that; a plain INSERT would
+  // fail on the primary key of a row the first attempt had already written.
+  const { statements } = buildStatements(
+    [rec({ sources: [{ id: 's1', source_type: 'hhs_ocr', source_url: 'https://x.gov/a', retrieved_at: NOW, checksum: 'c' }] })],
+    new Map(), new Set(), NOW
+  );
+  const insert = statements.find((s) => s.startsWith('INSERT INTO breaches'));
+  assert.ok(insert, 'a new breach must emit an insert');
+  assert.match(insert, /ON CONFLICT\(id\) DO UPDATE SET/);
+  const sourceInsert = statements.find((s) => s.startsWith('INSERT INTO sources'));
+  assert.ok(sourceInsert, 'a new source row must emit an insert');
+  assert.match(sourceInsert, /ON CONFLICT\(id\) DO UPDATE SET/);
+});

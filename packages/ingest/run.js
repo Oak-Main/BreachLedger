@@ -43,6 +43,7 @@ const SOURCES = {
 const { validate, logReject } = require('./validate');
 const { assignSlugs } = require('./slug');
 const { buildStatements, batch } = require('./d1-writer');
+const { buildManifest, buildAppliedReceipt } = require('./manifest');
 const { score } = require('../severity/score');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -154,6 +155,32 @@ function applyStaged(dir, remote, expectSources) {
   );
   d1File(combined, remote);
   console.error('ingest: staged data applied');
+
+  // The applied receipt: which manifest described the inputs, which
+  // batches were applied, and the digest of the bytes that were actually
+  // written. It is what binds an acceptance check to the data that
+  // reached the database.
+  const applied = buildAppliedReceipt({
+    sources: staged.map((m) => ({
+      source: m.source,
+      coverage: m.coverage,
+      statements: m.statements,
+      durable_manifest: m.durable_manifest || null,
+      applied_batches: (m.batches || []).map((b) => {
+        const full = path.join(dir, b);
+        return {
+          file: b,
+          sha256: fs.existsSync(full)
+            ? require('crypto').createHash('sha256').update(fs.readFileSync(full)).digest('hex')
+            : null,
+        };
+      }),
+    })),
+    writtenSql: combined,
+    remote,
+  });
+  fs.writeFileSync(path.join(dir, 'applied.json'), `${JSON.stringify(applied, null, 2)}\n`, 'utf8');
+  console.error(`ingest: applied receipt written to ${path.join(dir, 'applied.json')}`);
 }
 
 async function main() {
@@ -190,6 +217,43 @@ async function main() {
   }
   const hhs = selected.module;
   console.error(`ingest: source ${sourceId} (${selected.label}) from ${selected.gridPage}`);
+
+  // --- manifest -----------------------------------------------------------
+  // A durable, per-run, per-source, per-view record of what was actually
+  // observed and validated. It is written for EVERY run, including a dry run,
+  // so an acceptance check can bind the evidence to the inputs that were
+  // validated -- and, in a production run, to the statements that were
+  // actually applied. A view that produced no rows is still recorded: an
+  // empty view is an observation, not an absence.
+  const manifestDir = arg('manifest-dir', null);
+  const viewStats = new Map();
+  const writeManifest = (staged) => {
+    if (!manifestDir) return null;
+    fs.mkdirSync(manifestDir, { recursive: true });
+    const manifest = buildManifest({
+      sourceId,
+      source: selected,
+      coverage,
+      dryRun,
+      views,
+      viewStats,
+      totalRows,
+      distinct: byId.size,
+      valid: valid.length,
+      rejected,
+      stats,
+      statements: statements.length,
+      staged,
+    });
+    const file = path.join(manifestDir, `${sourceId}.manifest.json`);
+    fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    // The manifest's own digest is what the apply phase records, so the
+    // applied receipt names the exact manifest that described its inputs.
+    const digest = require('crypto').createHash('sha256')
+      .update(fs.readFileSync(file, 'utf8')).digest('hex');
+    console.error(`ingest: manifest written to ${file} (sha256 ${digest})`);
+    return { file, sha256: digest };
+  };
 
   // --- fetch -------------------------------------------------------------
   // Both portal views are required. "Under Investigation" holds only the last
@@ -235,6 +299,7 @@ async function main() {
   for (const v of views) {
     const { headers, rows } = hhs.parse(v.csv);
     totalRows += rows.length;
+    viewStats.set(v.view, { rows: rows.length, columns: headers.length });
     console.error(`ingest: view ${v.view}: parsed ${rows.length} rows, ${headers.length} columns`);
     // A zero-row export is either a listing that is genuinely empty or a
     // retrieval that broke, and those must not be conflated. The portal itself
@@ -367,11 +432,6 @@ async function main() {
     `ingest: ${stats.inserted} inserted, ${stats.updated} updated, ${stats.unchanged} unchanged, ${stats.sourcesAdded} source rows added`
   );
 
-  if (dryRun) {
-    console.error('ingest: --dry-run, no writes performed');
-    return;
-  }
-
   const files = batch(statements, 400);
 
   if (stageDir) {
@@ -381,11 +441,20 @@ async function main() {
     // apply phase can tell "validated, nothing to do" from "never ran".
     fs.mkdirSync(stageDir, { recursive: true });
     const written = [];
+    const batchDigests = [];
     files.forEach((sql, i) => {
       const file = path.join(stageDir, `${sourceId}.batch-${String(i + 1).padStart(3, '0')}.sql`);
       fs.writeFileSync(file, sql);
       written.push(path.basename(file));
+      batchDigests.push({
+        file: path.basename(file),
+        sha256: require('crypto').createHash('sha256').update(sql, 'utf8').digest('hex'),
+        bytes: Buffer.byteLength(sql, 'utf8'),
+      });
     });
+    // The durable manifest is written AFTER the batches exist, so it carries
+    // their digests and can be bound to what was actually applied.
+    const durable = writeManifest({ batches: batchDigests });
     fs.writeFileSync(
       path.join(stageDir, `${sourceId}.manifest.json`),
       JSON.stringify({
@@ -395,6 +464,9 @@ async function main() {
         batches: written,
         stats,
         stagedAt: now,
+        durable_manifest: durable
+          ? { file: path.basename(durable.file), sha256: durable.sha256 }
+          : null,
       }, null, 2),
       'utf8'
     );
@@ -402,6 +474,12 @@ async function main() {
       `ingest: staged ${statements.length} statement(s) in ${written.length} batch(es) -> ${stageDir} ` +
         '(no D1 write in this phase)'
     );
+    return;
+  }
+
+  if (dryRun) {
+    writeManifest({ batches: [], note: 'dry run: nothing was written' });
+    console.error('ingest: --dry-run, no writes performed');
     return;
   }
 
