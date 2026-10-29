@@ -114,8 +114,7 @@ class CookieJar {
  * that is actually CSV. Returns the CSV response, or null with the attempts
  * recorded for diagnosis.
  */
-async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts, label = '' }) {
-  const tag = label ? `${label}` : '';
+async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts }) {
   for (const enc of jsf.commandEncodings(hidden, commandId)) {
     let res;
     try {
@@ -127,14 +126,14 @@ async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts,
         headers: { 'Content-Type': enc.contentType },
       });
     } catch (err) {
-      attempts.push(`export[${enc.name}]${tag}: request failed: ${err.message}`);
+      attempts.push(`export[${enc.name}]: request failed: ${err.message}`);
       continue;
     }
     if (jsf.looksLikeCsv(res.body)) {
       return { res, encoding: enc.name };
     }
     attempts.push(
-      `export[${enc.name}]${tag}: ${res.body.length} bytes, not CSV (${jsf.excerpt(res.body, 120)})`
+      `export[${enc.name}]: ${res.body.length} bytes, not CSV (${jsf.excerpt(res.body, 120)})`
     );
   }
   return null;
@@ -336,21 +335,31 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
     // how many rows came back, so it can settle a switch that the row
     // comparison cannot.
     const tabState = tv.readTabState(html, tabView, responseHidden, archiveTabId);
-    const serverConfirmed =
-      tabState.activeIndex === String(ARCHIVE_TAB_INDEX) || tabState.panelVisible === true;
+    // Both signals, when the response carries both, must agree. A response
+    // that reports the archive index while leaving the archive panel hidden
+    // (or the reverse) contradicts itself, and a contradiction is not a
+    // confirmation.
+    const indexSaysArchive = tabState.activeIndex === String(ARCHIVE_TAB_INDEX);
+    const panelSaysArchive = tabState.panelVisible === true;
+    const signalsContradict =
+      tabState.activeIndex !== null && tabState.panelVisible !== null &&
+      indexSaysArchive !== panelSaysArchive;
+    const serverConfirmed = !signalsContradict && (indexSaysArchive || panelSaysArchive);
+    if (signalsContradict) {
+      attempts.push(
+        `archive[${variant.name}]: the server's own signals contradict each other ` +
+          `(${describeTabState(tabState)}) — refusing to treat that as a confirmed switch`
+      );
+      continue;
+    }
     const merged = tv.mergeViewState(responseHidden, viewState)
     const pageHidden = Object.keys(merged).length > 1 ? merged : tv.mergeViewState(gridHidden, viewState);
     // Which command is the CSV exporter is a per-render detail: the JSF client
-    // ids are regenerated every time the grid is rendered, and a render can
-    // leave the OTHER panel's exporter first in the document. Exporting with
-    // that one returns the page instead of a CSV, so every CSV candidate IN
-    // THIS RESPONSE is tried until one actually produces CSV.
-    //
-    // Only candidates from this response are used. An exporter id taken from
-    // a different render belongs to a different ViewState, and exporting with
-    // it can return a single PAGE of the wrong table -- rows that differ from
-    // the recent view, so a row comparison would not catch it, but which are
-    // not the archive either. A page is not an archive.
+    // ids are regenerated every time the grid is rendered. A response that
+    // carries SEVERAL CSV exporters is ambiguous -- the wrong one can return
+    // valid, row-distinct CSV for a DIFFERENT table, and no row comparison
+    // can detect that. So the archive is refused rather than guessed at.
+    // Only a single, unambiguous exporter is used.
     const csvCommands = jsf.listCommandCandidates(html)
       .filter((c) => c.isCsv)
       .map((c) => c.commandId);
@@ -363,20 +372,19 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
       );
       continue;
     }
-
-    let got = null;
-    let csvCommand = null;
-    for (const candidate of csvCommands) {
-      const attempt = await postExport({
-        fetchImpl, jar, action: gridAction, hidden: pageHidden,
-        commandId: candidate, attempts, label: ` ${variant.name}:${candidate}`,
-      });
-      if (attempt) {
-        got = attempt;
-        csvCommand = candidate;
-        break;
-      }
+    if (csvCommands.length > 1) {
+      attempts.push(
+        `archive[${variant.name}]: the response carries ${csvCommands.length} CSV exporters ` +
+          `(${csvCommands.join(', ')}); which one belongs to the archive cannot be established, ` +
+          'so the archive is not published'
+      );
+      continue;
     }
+    const csvCommand = csvCommands[0];
+
+    const got = await postExport({
+      fetchImpl, jar, action: gridAction, hidden: pageHidden, commandId: csvCommand, attempts,
+    });
     if (!got) continue;
 
     // CRITICAL: prove we actually changed views. If the tab switch silently

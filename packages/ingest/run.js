@@ -110,17 +110,49 @@ function applyStaged(dir, remote, expectSources) {
     throw new Error(`ingest: refusing to apply the stage: no staged manifests found in ${dir}`);
   }
 
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+  // The apply list comes from the MANIFESTS, not from whatever happens to be
+  // lying in the directory. A batch a manifest lists but that is missing means
+  // the stage is incomplete, and applying the rest would apply that source
+  // only in part. A .sql file that no manifest lists belongs to no source, and
+  // must not be applied at all.
+  const files = [];
+  for (const m of staged) {
+    for (const batch of m.batches || []) {
+      const file = path.join(dir, batch);
+      if (!fs.existsSync(file)) {
+        throw new Error(
+          `ingest: refusing to apply the stage: the staged batch ${batch} for source ` +
+            `${m.source} is missing, so that source would be applied only in part`
+        );
+      }
+      files.push({ source: m.source, file });
+    }
+  }
+  const listed = new Set(files.map((f) => path.basename(f.file)));
+  const stray = fs.readdirSync(dir).filter((f) => f.endsWith('.sql') && !listed.has(f));
+  if (stray.length) {
+    throw new Error(
+      `ingest: refusing to apply the stage: ${stray.length} file(s) in ${dir} are listed by no ` +
+        `manifest (${stray.join(', ')}); they may belong to an earlier stage`
+    );
+  }
+
   if (!files.length) {
     console.error('ingest: every staged source reported no changes; nothing to apply');
     return;
   }
 
-  console.error(`ingest: applying ${files.length} staged batch(es) from ${dir}`);
-  for (const f of files) {
-    console.error(`ingest: applying staged batch ${f}`);
-    d1File(fs.readFileSync(path.join(dir, f), 'utf8'), remote);
-  }
+  // ONE D1 execution for the whole stage. Separate executions are separate
+  // transactions: if the second one fails -- a transient remote error, a quota
+  // error, a constraint error -- the first is already committed and the
+  // database is left holding a partial ingest that no rollback undoes. One
+  // execution is one operation, so the stage is applied or it is not.
+  const combined = files.map((f) => fs.readFileSync(f.file, 'utf8')).join('\n');
+  console.error(
+    `ingest: applying ${files.length} staged batch(es) from ${dir} in ONE D1 operation ` +
+      `(${files.map((f) => f.source).join(', ')})`
+  );
+  d1File(combined, remote);
   console.error('ingest: staged data applied');
 }
 

@@ -77,3 +77,41 @@ test('the apply phase refuses when a source is missing from the expectation list
   const ok = apply(dir, ['--expect-sources', 'hhs_ocr']);
   assert.equal(ok.code, 0, ok.out);
 });
+
+test('the apply phase refuses when a batch a manifest lists is missing', () => {
+  // The manifest says the source has two batches, but only one is on disk.
+  // Applying what is there would apply that source only in part.
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'hhs_ocr.batch-001.sql'), 'SELECT 1;');
+  fs.writeFileSync(
+    path.join(dir, 'hhs_ocr.manifest.json'),
+    JSON.stringify({
+      source: 'hhs_ocr', coverage: 'all', statements: 2,
+      batches: ['hhs_ocr.batch-001.sql', 'hhs_ocr.batch-002.sql'], stats: {},
+    }),
+    'utf8'
+  );
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.notEqual(res.code, 0, 'an incomplete stage must not be applied');
+  assert.match(res.out, /staged batch hhs_ocr\.batch-002\.sql for source hhs_ocr is missing/);
+});
+
+test('the apply phase refuses a sql file that no manifest lists', () => {
+  // A leftover file from an earlier stage belongs to no source. Applying it
+  // would write data that was never validated against the current run.
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'hhs_ocr.batch-001.sql'), 'SELECT 1;');
+  fs.writeFileSync(
+    path.join(dir, 'hhs_ocr.manifest.json'),
+    JSON.stringify({
+      source: 'hhs_ocr', coverage: 'all', statements: 1,
+      batches: ['hhs_ocr.batch-001.sql'], stats: {},
+    }),
+    'utf8'
+  );
+  fs.writeFileSync(path.join(dir, 'stale.batch-001.sql'), 'SELECT 2;');
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.notEqual(res.code, 0, 'a stale file must not be applied');
+  assert.match(res.out, /listed by no manifest/);
+  assert.match(res.out, /stale\.batch-001\.sql/);
+});
