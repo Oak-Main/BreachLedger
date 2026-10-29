@@ -84,6 +84,20 @@ function d1File(sql, remote) {
   }
 }
 
+function stagedBatchPath(dir, name) {
+  const root = path.resolve(dir);
+  if (typeof name !== 'string' || !name || path.isAbsolute(name) ||
+      /[\\/]/.test(name) || path.basename(name) !== name) {
+    throw new Error(`ingest: refusing batch path outside stage: ${name}`);
+  }
+  const file = path.resolve(root, name);
+  if (path.dirname(file) !== root ||
+      (fs.existsSync(file) && path.dirname(fs.realpathSync(file)) !== fs.realpathSync(root))) {
+    throw new Error(`ingest: refusing batch path outside stage: ${name}`);
+  }
+  return file;
+}
+
 /**
  * Write the statements that --stage validated.
  *
@@ -97,6 +111,9 @@ function applyStaged(dir, remote, expectSources) {
   const manifests = fs.readdirSync(dir).filter((f) => f.endsWith('.manifest.json')).sort();
   const staged = manifests.map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
   const stagedSources = staged.map((m) => m.source);
+  if (new Set(stagedSources).size !== stagedSources.length || stagedSources.some((s) => !Object.hasOwn(SOURCES, s))) {
+    throw new Error('ingest: refusing duplicate or unregistered staged sources');
+  }
 
   if (expectSources && expectSources.length) {
     const missing = expectSources.filter((s) => !stagedSources.includes(s));
@@ -105,6 +122,10 @@ function applyStaged(dir, remote, expectSources) {
         `ingest: refusing to apply the stage: no validated data staged for source(s) ` +
           `${missing.join(', ')} (staged: ${stagedSources.join(', ') || 'none'})`
       );
+    }
+    const unexpected = stagedSources.filter((s) => !expectSources.includes(s));
+    if (unexpected.length) {
+      throw new Error(`ingest: refusing unexpected staged source(s): ${unexpected.join(', ')}`);
     }
   }
   if (!manifests.length) {
@@ -119,7 +140,7 @@ function applyStaged(dir, remote, expectSources) {
   const files = [];
   for (const m of staged) {
     for (const batch of m.batches || []) {
-      const file = path.join(dir, batch);
+      const file = stagedBatchPath(dir, batch);
       if (!fs.existsSync(file)) {
         throw new Error(
           `ingest: refusing to apply the stage: the staged batch ${batch} for source ` +
@@ -175,7 +196,7 @@ function applyStaged(dir, remote, expectSources) {
       throw new Error(`ingest: refusing to apply the stage: source ${m.source} does not match its validated durable manifest`);
     }
     for (const d of digests) {
-      const full = path.join(dir, d.file);
+      const full = stagedBatchPath(dir, d.file);
       const actual = fs.existsSync(full)
         ? require('crypto').createHash('sha256').update(fs.readFileSync(full)).digest('hex')
         : null;
@@ -233,7 +254,7 @@ function applyStaged(dir, remote, expectSources) {
       statements: m.statements,
       durable_manifest: m.durable_manifest || null,
       applied_batches: (m.batches || []).map((b) => {
-        const full = path.join(dir, b);
+        const full = stagedBatchPath(dir, b);
         return {
           file: b,
           sha256: fs.existsSync(full)

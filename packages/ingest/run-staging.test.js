@@ -289,3 +289,43 @@ test('stage metadata cannot name a different source or invent batches beside a v
   assert.match(res.out, /does not match its validated durable manifest/);
   assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
 });
+
+test('an explicit expected source set rejects a stale additional source', () => {
+  const dir = tmpDir();
+  for (const source of ['hhs_ocr', 'hhs_part2']) writeBoundStage(dir, { source, coverage: 'all', statements: 0, batches: [] });
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.notEqual(res.code, 0);
+  assert.match(res.out, /unexpected staged source.*hhs_part2/);
+  assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
+});
+
+for (const name of ['../outside.sql', '/tmp/outside.sql', '..\\outside.sql']) {
+  test(`a batch path cannot escape the staging directory: ${name}`, () => {
+    const dir = tmpDir();
+    writeBoundStage(dir, { source: 'hhs_ocr', coverage: 'all', statements: 1, batches: [name], batch_digests: [{ file: name, sha256: 'a'.repeat(64), bytes: 0 }] });
+    const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+    assert.notEqual(res.code, 0);
+    assert.match(res.out, /batch path outside stage/);
+    assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
+  });
+}
+
+test('a batch symlink cannot read SQL outside the staging directory', () => {
+  const dir = tmpDir();
+  const outside = path.join(tmpDir(), 'outside.sql');
+  fs.writeFileSync(outside, 'SELECT 1;');
+  fs.symlinkSync(outside, path.join(dir, 'hhs_ocr.batch-001.sql'));
+  writeBoundStage(dir, { source: 'hhs_ocr', coverage: 'all', statements: 1, batches: ['hhs_ocr.batch-001.sql'], batch_digests: [{ file: 'hhs_ocr.batch-001.sql', sha256: require('crypto').createHash('sha256').update('SELECT 1;').digest('hex'), bytes: 9 }] });
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.notEqual(res.code, 0);
+  assert.match(res.out, /batch path outside stage/);
+});
+
+test('duplicate staged sources are refused before receipts or writes', () => {
+  const dir = tmpDir();
+  writeBoundStage(dir, { source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [] });
+  fs.copyFileSync(path.join(dir, 'hhs_ocr.manifest.json'), path.join(dir, 'duplicate.manifest.json'));
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.notEqual(res.code, 0);
+  assert.match(res.out, /duplicate or unregistered staged sources/);
+});

@@ -224,6 +224,9 @@ async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_
     const gridCommand = jsf.findCommandByLabel(front.body, GRID_LABEL);
     if (jsf.extractViewState(frontHidden) && gridCommand) {
       const frontAction = new URL(jsf.extractFormAction(front.body) || FRONT_PAGE, FRONT_PAGE).toString();
+      if (safeUrl(frontAction) !== safeUrl(FRONT_PAGE)) {
+        throw new Error('front-page form action targets a different path or origin; refusing postback');
+      }
       // The navigation postback needs a decodable encoding too, for exactly the
       // same reason the export does.
       for (const enc of jsf.commandEncodings(frontHidden, gridCommand)) {

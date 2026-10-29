@@ -977,3 +977,12 @@ test('a report cannot send its session to another report or origin through a cha
     assert.equal(calls.some(c => c.method === 'POST'), false);
   }
 });
+
+test('fallback front-page form actions are validated before transmitting the session', async () => {
+  for (const action of ['https://example.org/steal', PART2_GRID_PAGE]) {
+    const frontBody = FRONT.replace('/ocr/breach/breach_report.jsf;jsessionid=ABC', action);
+    const { impl, calls } = mockPortal({ directGrid: '<html>Covered Entity chrome only</html>', frontBody });
+    await assert.rejects(() => fetchBreachCsv({ fetchImpl: impl }), /front-page form action targets a different path or origin/);
+    assert.equal(calls.some(c => c.method === 'POST'), false);
+  }
+});
