@@ -276,7 +276,7 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
     checksum: current.steps.checksum,
     retrieved_at: current.steps.retrieved_at,
     requested_url: gridPage,
-    final_url_safe: safeUrl(current.steps.final_url),
+    final_url_safe: safeUrl(current.final_url),
     gridReportsEmpty: current.gridReportsEmpty,
     steps: current.steps,
   });

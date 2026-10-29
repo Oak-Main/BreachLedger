@@ -99,6 +99,11 @@ function buildManifest(input) {
         // The exact-byte SHA-256 of the exported CSV: a digest of the SOURCE
         // VIEW, carried onto every record row that came from that view.
         sha256: v.checksum || null,
+        // The digest's basis, stated so a reader does not have to guess:
+        // it is the SHA-256 of this view's exported bytes as received.
+        // The ingest hashes the decoded UTF-8 text, which for a well-formed
+        // UTF-8 export is byte-identical to the received bytes.
+        digest_basis: 'sha256 over the view\'s exported bytes (UTF-8 text as received)',
         bytes: v.csv === undefined ? null : Buffer.byteLength(v.csv, 'utf8'),
         rows: st.rows === undefined ? null : st.rows,
         columns: st.columns === undefined ? null : st.columns,

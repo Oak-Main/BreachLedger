@@ -115,3 +115,16 @@ test('the insert statements are idempotent, so a partially applied stage can be 
   assert.ok(sourceInsert, 'a new source row must emit an insert');
   assert.match(sourceInsert, /ON CONFLICT\(id\) DO UPDATE SET/);
 });
+
+test('the upsert never rewrites first_seen_at', () => {
+  // first_seen_at is the row's original observation. Re-applying a stage
+  // must not move it, or a recovery would silently restate history.
+  const { statements } = buildStatements([rec()], new Map(), new Set(), NOW);
+  const insert = statements.find((s) => s.startsWith('INSERT INTO breaches'));
+  assert.ok(insert, 'a new breach must emit an insert');
+  assert.ok(
+    !/first_seen_at\s*=\s*excluded\.first_seen_at/.test(insert),
+    'the conflict branch must not overwrite first_seen_at'
+  );
+  assert.match(insert, /updated_at = excluded\.updated_at/);
+});

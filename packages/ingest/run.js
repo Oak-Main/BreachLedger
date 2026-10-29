@@ -140,6 +140,21 @@ function applyStaged(dir, remote, expectSources) {
 
   if (!files.length) {
     console.error('ingest: every staged source reported no changes; nothing to apply');
+    // A no-op is still an applied outcome: the receipt says that the staged
+    // data was validated and nothing needed writing.
+    const noop = buildAppliedReceipt({
+      sources: staged.map((m) => ({
+        source: m.source,
+        coverage: m.coverage,
+        statements: m.statements,
+        durable_manifest: m.durable_manifest || null,
+        applied_batches: [],
+      })),
+      writtenSql: '',
+      remote,
+    });
+    fs.writeFileSync(path.join(dir, 'applied.json'), `${JSON.stringify(noop, null, 2)}\n`, 'utf8');
+    console.error(`ingest: applied receipt written to ${path.join(dir, 'applied.json')}`);
     return;
   }
 
@@ -149,6 +164,25 @@ function applyStaged(dir, remote, expectSources) {
   // database is left holding a partial ingest that no rollback undoes. One
   // execution is one operation, so the stage is applied or it is not.
   const combined = files.map((f) => fs.readFileSync(f.file, 'utf8')).join('\n');
+  // Verify every staged batch against the digest the manifest recorded when
+  // it was staged. An edited or corrupted staged file must never be
+  // applied, even though the receipt would merely report the difference
+  // afterwards.
+  for (const m of staged) {
+    for (const d of m.batch_digests || []) {
+      const full = path.join(dir, d.file);
+      const actual = fs.existsSync(full)
+        ? require('crypto').createHash('sha256').update(fs.readFileSync(full)).digest('hex')
+        : null;
+      if (actual !== d.sha256) {
+        throw new Error(
+          `ingest: refusing to apply the stage: the staged batch ${d.file} does not match the ` +
+            `digest recorded in the manifest (expected ${d.sha256}, got ${actual})`
+        );
+      }
+    }
+  }
+
   console.error(
     `ingest: applying ${files.length} staged batch(es) from ${dir} in ONE D1 operation ` +
       `(${files.map((f) => f.source).join(', ')})`
@@ -225,10 +259,14 @@ async function main() {
   // validated -- and, in a production run, to the statements that were
   // actually applied. A view that produced no rows is still recorded: an
   // empty view is an observation, not an absence.
-  const manifestDir = arg('manifest-dir', null);
+  // The manifest is written on EVERY execution path, so the location has a
+  // default rather than being optional. The workflow passes an explicit
+  // --manifest-dir so the artifact can be uploaded from a known place.
+  const manifestDir = arg('manifest-dir',
+    process.env.INGEST_MANIFEST_DIR || path.join(require('os').tmpdir(), 'breachledger-ingest-manifest'));
   const viewStats = new Map();
   const writeManifest = (staged) => {
-    if (!manifestDir) return null;
+
     fs.mkdirSync(manifestDir, { recursive: true });
     const manifest = buildManifest({
       sourceId,
@@ -462,6 +500,7 @@ async function main() {
         coverage,
         statements: statements.length,
         batches: written,
+        batch_digests: batchDigests,
         stats,
         stagedAt: now,
         durable_manifest: durable
@@ -488,6 +527,7 @@ async function main() {
     return;
   }
 
+  writeManifest({ batches: [], note: 'direct write: the statements were applied from memory' });
   files.forEach((sql, i) => {
     console.error(`ingest: applying batch ${i + 1}/${files.length}`);
     d1File(sql, remote);

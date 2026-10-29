@@ -86,7 +86,9 @@ function buildStatements(records, existingBreaches, existingSourceKeys, now) {
       statements.push(
         `INSERT INTO breaches (${ALL_COLUMNS.join(', ')}) VALUES (${ALL_COLUMNS.map((c) => sqlLiteral(row[c])).join(', ')})` +
         ` ON CONFLICT(id) DO UPDATE SET ${CONTENT_COLUMNS.map((c) => `${c} = excluded.${c}`).join(', ')}, ` +
-        `first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at;`
+        // first_seen_at is the row's original observation and is NOT
+        // overwritten: a re-applied stage must not rewrite it.
+        `updated_at = excluded.updated_at;`
       );
       stats.inserted++;
     } else if (recordChanged(rec, existing)) {
