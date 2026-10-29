@@ -181,7 +181,7 @@ const TABBED_GRID = `<html><form id="ocrForm" action="/ocr/breach/breach_report_
 // archive tab's own exporter and a fresh ViewState.
 const ARCHIVE_PARTIAL =
   '<?xml version="1.0"?><partial-response><changes>' +
-  '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+  '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
   '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
   '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
   '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -196,7 +196,7 @@ const ARCHIVE_PARTIAL =
 // server's own answer is consulted.
 const UNCONFIRMED_PARTIAL =
   '<?xml version="1.0"?><partial-response><changes>' +
-  '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+  '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
   '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="0">' +
   '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
   '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -431,7 +431,7 @@ test('a differing export is refused when the server did not confirm the switch',
   // row comparison can stand in for the server's own answer.
   const hiddenPanel =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -480,7 +480,7 @@ test('a switch whose signals contradict each other is refused', async () => {
   // nothing.
   const contradictory =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -500,7 +500,7 @@ test('a response that does not show the archive panel cannot confirm the switch'
   // nothing independent to confirm on.
   const noPanel =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
     '<img alt="CSV" src="/i/csv.png"></a></div>]]></update>' +
@@ -537,7 +537,7 @@ test('an ambiguous response with two exporters, neither of which passes, is refu
   // than one of them being picked.
   const twoExporters =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -568,7 +568,7 @@ test('a wrong-panel exporter is rejected while a correct one is accepted', async
   // one must not become the archive.
   const twoExporters =
     '<?xml version="1.0"?><partial-response><changes>' +
-    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div><span>Name of Covered Entity</span>' +
     '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
     '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
     '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
@@ -943,4 +943,37 @@ test('a grid GET timeout retries with a fresh session while validation failures 
   let invalidGets = 0;
   await assert.rejects(() => fetchBreachCsv({ fetchImpl: async () => { invalidGets++; return { body: '<html>wrong report</html>' }; } }), /does not identify itself/);
   assert.equal(invalidGets, 1);
+});
+
+for (const redirected of [false, true]) {
+  test(`fallback navigation refuses the wrong report before using its exporter (redirected=${redirected})`, async () => {
+    const { impl } = mockPortal({ directGrid: '<html>Covered Entity chrome only, no exporter</html>', navGrid: PART2_GRID, stamps: { nav: { checksum: 'wrong', retrieved_at: 'T', redirected, final_url: PART2_GRID_PAGE } } });
+    await assert.rejects(() => fetchBreachCsv({ fetchImpl: impl }), redirected ? /navigation returned a redirect/ : /response came from|does not identify itself/);
+  });
+}
+
+test('a partial archive response cannot change the legal report at the same URL', async () => {
+  const wrong = ARCHIVE_PARTIAL.replace('Name of Covered Entity', 'Name of Part 2 Program');
+  const { impl } = mockTabbedPortal({ archivePartial: wrong });
+  let archiveExports = 0;
+  const wrapped = async (url, opts = {}) => {
+    if (String(opts.body).includes('j_idt500')) archiveExports++;
+    return impl(url, opts);
+  };
+  await assert.rejects(() => fetchAllViews({ fetchImpl: wrapped }), /does not identify itself as the expected report/);
+  assert.equal(archiveExports, 0, 'never export a partial update from the wrong report');
+});
+
+test('a partial archive table with no report identity fails closed', async () => {
+  const { impl } = mockTabbedPortal({ archivePartial: ARCHIVE_PARTIAL.replace('Name of Covered Entity', 'Unknown report') });
+  await assert.rejects(() => fetchAllViews({ fetchImpl: impl }), /does not identify itself as the expected report/);
+});
+
+test('a report cannot send its session to another report or origin through a changed form action', async () => {
+  for (const action of [PART2_GRID_PAGE, 'https://example.org/ocr/breach/breach_report_hip.jsf']) {
+    const grid = GRID.replace('action="/ocr/breach/breach_report_hip.jsf"', `action="${action}"`);
+    const { impl, calls } = mockPortal({ directGrid: grid });
+    await assert.rejects(() => fetchBreachCsv({ fetchImpl: impl }), /form action targets a different report or origin/);
+    assert.equal(calls.some(c => c.method === 'POST'), false);
+  }
 });

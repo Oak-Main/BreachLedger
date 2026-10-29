@@ -65,7 +65,7 @@ async function sessionFetch(fetchImpl, url, options) {
 // HIPAA grid would export ~7,760 HIPAA breaches and publish every one of them
 // as a substance use disorder treatment record.
 const GRID_IDENTITY = {
-  [GRID_PAGE]: /Covered Entity|HIPAA/i,
+  [GRID_PAGE]: /Covered Entity/i,
   [PART2_GRID_PAGE]: /42 CFR Part 2|Part 2 Program|Part 2 Cases/i,
 };
 
@@ -183,7 +183,7 @@ async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts,
 }
 
 /** Try to obtain the export from a page that already contains the exporter. */
-async function exportFromPage({ fetchImpl, jar, pageUrl, pageBody, attempts, pathName }) {
+async function exportFromPage({ fetchImpl, jar, pageUrl, reportPage = pageUrl, pageBody, attempts, pathName }) {
   const hidden = jsf.extractHiddenInputs(pageBody);
   const viewState = jsf.extractViewState(hidden);
   const commandId = jsf.findCsvExportCommand(pageBody);
@@ -195,6 +195,9 @@ async function exportFromPage({ fetchImpl, jar, pageUrl, pageBody, attempts, pat
     return null;
   }
   const action = new URL(jsf.extractFormAction(pageBody) || pageUrl, pageUrl).toString();
+  if (safeUrl(action) !== safeUrl(reportPage)) {
+    throw new Error('export form action targets a different report or origin; refusing postback');
+  }
   const got = await postExport({ fetchImpl, jar, action, hidden, commandId, attempts });
   if (!got) return null;
   return { csv: got.res, commandId, encoding: got.encoding, path: pathName };
@@ -207,6 +210,7 @@ async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_
   // --- Primary: the data grid, fetched directly --------------------------
   const direct = await sessionFetch(fetchImpl, gridPage, { raw: true, jar, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
   assertGridIdentity(gridPage, direct, label);
+  if (direct.redirected === true) throw restartSession('initial grid followed a redirect');
   let result = await exportFromPage({
     fetchImpl, jar, pageUrl: gridPage, pageBody: direct.body, attempts, pathName: 'direct-grid',
   });
@@ -215,6 +219,7 @@ async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_
   // Only meaningful for the HIPAA grid; the Part 2 grid is reached directly.
   if (!result && gridPage === GRID_PAGE) {
     const front = await sessionFetch(fetchImpl, FRONT_PAGE, { raw: true, jar, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
+    if (front.redirected === true) throw restartSession('front page followed a redirect');
     const frontHidden = jsf.extractHiddenInputs(front.body);
     const gridCommand = jsf.findCommandByLabel(front.body, GRID_LABEL);
     if (jsf.extractViewState(frontHidden) && gridCommand) {
@@ -229,10 +234,17 @@ async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_
           body: enc.body,
           headers: { 'Content-Type': enc.contentType },
         });
+        if (grid.redirected === true || /<(?:redirect|error)\b/i.test(grid.body)) {
+          throw restartSession('front-page navigation returned a redirect or JSF error');
+        }
+        // A navigation may fail to render a grid at all. Only a page whose
+        // exporter could be used needs the requested report's positive identity.
+        if (jsf.findCsvExportCommand(grid.body)) assertGridIdentity(gridPage, grid, label);
         const candidate = await exportFromPage({
           fetchImpl,
           jar,
           pageUrl: frontAction,
+          reportPage: gridPage,
           pageBody: grid.body,
           attempts,
           pathName: `front-nav[${enc.name}]`,
@@ -363,12 +375,16 @@ async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = 
     const jar = new CookieJar();
     const grid = await sessionFetch(fetchImpl, gridPage, { raw: true, jar, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
     assertGridIdentity(gridPage, grid, label);
+    if (grid.redirected === true) throw restartSession('archive grid followed a redirect');
     // Discovery aid: what other portal pages exist, for locating the archive.
     const linked = jsf.linkedPages(grid.body);
     if (linked.length) console.error(redact(`${label}: .jsf pages linked from the grid: ${linked.join(' | ')}`));
 
     const gridHidden = jsf.extractHiddenInputs(grid.body);
     const gridAction = new URL(jsf.extractFormAction(grid.body) || gridPage, gridPage).toString();
+    if (safeUrl(gridAction) !== safeUrl(gridPage)) {
+      throw new Error('archive form action targets a different report or origin; refusing postback');
+    }
     const tabView = tv.findTabView(gridHidden);
     const archiveTabId = tv.findTabId(grid.body, ARCHIVE_PATTERN);
     // The archive's index in the navigation order, read from the grid page.
@@ -471,6 +487,10 @@ async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = 
       );
       continue;
     }
+
+    // Partial updates include the separately rendered report table, whose
+    // headings bind its exporter to HIPAA or Part 2 independently of tab state.
+    if (isPartial) assertGridIdentity(gridPage, { ...res, body: html }, label);
 
     const exports = [];
     for (const candidate of csvCommands) {

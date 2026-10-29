@@ -51,8 +51,8 @@ each page's widget rather than hardcoding them.
 ## Correction and acceptance policy
 
 - Bound each CSV export at 90 seconds and permit at most two complete source
-  sessions. Session pages request no-cache so an intermediary cannot deliberately
-  reuse a previously rendered token. A transport failure, JSF redirect/error or changed ViewState discards
+  sessions. Session pages request no-cache for freshly rendered tokens. A transport
+  failure, JSF redirect/error or changed ViewState discards
   the uncertain session. Rediscover cookies, tokens and generated ids, and
   re-fetch both source views before considering success.
 - Discover the actual tabChange render targets, including the results table,
@@ -86,7 +86,7 @@ Source, coverage, dry-run status, statement counts and ordered batch digests mus
 agree with that durable manifest; unbound legacy stages are rejected. Failure
 receipts use the same default/environment-selected directory as normal manifests.
 
-Local verification after these corrections: **617 tests passed**, zero failed or
+Local verification after these corrections: **622 tests passed**, zero failed or
 skipped; typecheck passed (18 files). The empty-data build smoke test also passed.
 
 [Full-coverage dry run 40919381366](https://github.com/Oak-Main/BreachLedger/actions/runs/40919381366)
@@ -96,3 +96,11 @@ calculated one insertion and one new source row, without writing either. Both
 Part 2 views were verified empty from server state and the grid. Export, build
 and deployment were correctly skipped. Final-revision dry-run and publication
 acceptance remain separate release evidence.
+
+Follow-up re-review also binds export-capable fallback navigation and partial
+archive table responses to the requested report identity before exporting.
+Redirected navigation is retried from a fresh session; wrong or missing report
+identity is a fatal validation error. HIPAA identity requires its Covered Entity
+heading, rather than a generic HIPAA reference elsewhere on a Part 2 page.
+Form actions are also bound to the requested report/origin before any export
+postback sends the session, including the fallback navigation path.
