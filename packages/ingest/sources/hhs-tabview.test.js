@@ -134,3 +134,40 @@ test('a client id containing regex metacharacters is matched literally', () => {
   const state = tv.readTabState(html, TABVIEW, {}, 'ocrForm:j_idt31:archive.tab');
   assert.equal(state.panelVisible, false);
 });
+
+// --- The tab's index comes from the markup, not from an assumption ---------
+
+test('finds the index of a tab in the navigation order', () => {
+  const html = '<ul class="ui-tabs-nav">' +
+    '<li><a href="#ocrForm:j_idt31:underInvTab">Under Investigation</a></li>' +
+    '<li><a href="#ocrForm:j_idt31:archiveTab">Archive</a></li>' +
+    '<li><a href="#ocrForm:j_idt31:helpTab">Help</a></li>' +
+    '</ul>';
+  assert.equal(tv.findTabIndex(html, 'ocrForm:j_idt31:underInvTab'), 0);
+  assert.equal(tv.findTabIndex(html, 'ocrForm:j_idt31:archiveTab'), 1);
+  assert.equal(tv.findTabIndex(html, 'ocrForm:j_idt31:helpTab'), 2);
+});
+
+test('a tab that is not in the navigation has no index', () => {
+  const html = '<ul class="ui-tabs-nav"><li><a href="#a">A</a></li></ul>';
+  assert.equal(tv.findTabIndex(html, 'ocrForm:j_idt31:archiveTab'), null);
+});
+
+test('anchors outside the tab navigation do not shift the index', () => {
+  const html = '<a href="#top">skip to top</a>' +
+    '<ul class="ui-tabs-nav">' +
+    '<li><a href="#ocrForm:j_idt31:underInvTab">Under Investigation</a></li>' +
+    '<li><a href="#ocrForm:j_idt31:archiveTab">Archive</a></li>' +
+    '</ul><a href="#footer">footer</a>';
+  assert.equal(tv.findTabIndex(html, 'ocrForm:j_idt31:archiveTab'), 1);
+});
+
+test('a reordered TabView reports the archive at its new index', () => {
+  // The archive is found by its label, so its index must follow the markup:
+  // a hardcoded index would contradict the tab that was actually found.
+  const html = '<ul class="ui-tabs-nav">' +
+    '<li><a href="#ocrForm:j_idt31:archiveTab">Archive</a></li>' +
+    '<li><a href="#ocrForm:j_idt31:underInvTab">Under Investigation</a></li>' +
+    '</ul>';
+  assert.equal(tv.findTabIndex(html, 'ocrForm:j_idt31:archiveTab'), 0);
+});

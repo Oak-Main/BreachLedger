@@ -425,6 +425,104 @@ test('an archive whose rows differ from the recent view is verified by the rows 
   assert.equal(views[1].archiveVerificationBasis, 'distinct-data-rows');
 });
 
+// --- The signals and the data both have to agree ---------------------------
+
+test('a switch whose signals contradict each other is refused', async () => {
+  // The activeIndex says the Archive tab is selected, but the server left the
+  // Archive panel hidden. The response contradicts itself, so it confirms
+  // nothing.
+  const contradictory =
+    '<?xml version="1.0"?><partial-response><changes>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
+    '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-helper-hidden">' +
+    '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
+    '<img alt="CSV" src="/i/csv.png"></a></div></div>]]></update>' +
+    '<update id="j_id1:javax.faces.ViewState:0"><![CDATA[VS-ARCHIVE]]></update>' +
+    '</changes></partial-response>';
+  const impl = emptyViewsPortal({ switchPartial: contradictory });
+  await assert.rejects(
+    () => fetchAllViews({ fetchImpl: impl, gridPage: GRID_PAGE }),
+    /contradict each other/
+  );
+});
+
+test('a response that does not show the archive panel cannot confirm the switch', async () => {
+  // The index field alone can be an echo of the value that was posted. The
+  // panel's visibility is the server's own rendering, so without it there is
+  // nothing independent to confirm on.
+  const noPanel =
+    '<?xml version="1.0"?><partial-response><changes>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
+    '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
+    '<img alt="CSV" src="/i/csv.png"></a></div>]]></update>' +
+    '<update id="j_id1:javax.faces.ViewState:0"><![CDATA[VS-ARCHIVE]]></update>' +
+    '</changes></partial-response>';
+  const impl = emptyViewsPortal({ switchPartial: noPanel });
+  await assert.rejects(
+    () => fetchAllViews({ fetchImpl: impl, gridPage: GRID_PAGE }),
+    /does not show the archive panel/
+  );
+});
+
+test('an archive that is a superset of the recent view is refused', async () => {
+  // The export returned the recent rows PLUS a breach published between the
+  // two fetches. The rows differ, so a difference check would pass it -- but
+  // it is the RECENT table again, and publishing it as the archive would
+  // double-count the recent window.
+  const SUPERSET = 'Name of Covered Entity,State\nAcme Clinic,CA\nNew Clinic,NY\n';
+  const { impl } = mockTabbedPortal({ archiveWorks: true });
+  const wrapped = async (url, opts = {}) => {
+    const res = await impl(url, opts);
+    if (res.body === ARCHIVE_CSV) return { ...res, body: SUPERSET };
+    return res;
+  };
+  await assert.rejects(
+    () => fetchAllViews({ fetchImpl: wrapped }),
+    /not a distinct older dataset/
+  );
+});
+
+test('a wrong-panel exporter is rejected while a correct one is accepted', async () => {
+  // Two CSV exporters in the switch response: the first exports the RECENT
+  // table (a superset of it), the second exports the real archive. The wrong
+  // one must not become the archive.
+  const twoExporters =
+    '<?xml version="1.0"?><partial-response><changes>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
+    '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
+    '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
+    '<img alt="CSV" src="/i/csv.png"></a>' +
+    '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt501\':\'x\'},\'\')">' +
+    '<img alt="CSV" src="/i/csv.png"></a></div></div>]]></update>' +
+    '<update id="j_id1:javax.faces.ViewState:0"><![CDATA[VS-ARCHIVE]]></update>' +
+    '</changes></partial-response>';
+  const SUPERSET = 'Name of Covered Entity,State\nAcme Clinic,CA\nNew Clinic,NY\n';
+  const impl = async (url, opts = {}) => {
+    const body = String(opts.body || '');
+    const method = opts.method || 'GET';
+    if (method === 'GET') return { body: TABBED_GRID, checksum: 'g', retrieved_at: 'T' };
+    if (body.includes('tabChange') || body.includes('_activeIndex=1')) {
+      return { body: twoExporters, checksum: 'p', retrieved_at: 'T' };
+    }
+    // j_idt500 is the wrong panel (a superset of the recent view);
+    // j_idt501 is the real archive.
+    if (body.includes('j_idt500')) {
+      return { body: SUPERSET, checksum: 'w', retrieved_at: 'T' };
+    }
+    if (body.includes('j_idt501')) {
+      return { body: ARCHIVE_CSV, checksum: 'a', retrieved_at: 'T' };
+    }
+    return { body: CSV, checksum: 'c', retrieved_at: 'T' };
+  };
+  const views = await fetchAllViews({ fetchImpl: impl });
+  assert.equal(views.length, 2);
+  assert.equal(views[1].view, 'archive');
+  assert.equal(views[1].csv.includes('Old Clinic'), true, 'the real archive must be the one published');
+});
+
 test('still rejects a failed tab switch when the views actually hold rows', async () => {
   const { impl } = mockTabbedPortal({ archiveWorks: false });
   await assert.rejects(() => fetchAllViews({ fetchImpl: impl }), /could not export distinct archived data/);

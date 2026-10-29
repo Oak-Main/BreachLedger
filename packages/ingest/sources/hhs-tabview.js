@@ -162,9 +162,29 @@ function readTabState(html, tabView, hidden, tabClientId) {
   return { activeIndex, panelVisible };
 }
 
+/**
+ * Find the index of a tab in the TabView's navigation order.
+ *
+ * The archive is located by its LABEL, so its index cannot be assumed: if the
+ * portal ever reorders the tabs, a hardcoded index would contradict the tab
+ * that was actually found, and the two signals would then disagree forever.
+ */
+function findTabIndex(html, tabClientId) {
+  const text = String(html || '');
+  const nav = /<ul[^>]*class="[^"]*ui-tabs-nav[^"]*"[^>]*>([\s\S]*?)<\/ul>/i.exec(text);
+  const scope = nav ? nav[1] : text;
+  const re = /<a\b[^>]*\bhref\s*=\s*["']#([^"']+)["'][^>]*>/gi;
+  const ids = [];
+  let m;
+  while ((m = re.exec(scope))) ids.push(m[1]);
+  const i = ids.indexOf(tabClientId);
+  return i === -1 ? null : i;
+}
+
 module.exports = {
   findTabView,
   findTabId,
+  findTabIndex,
   buildTabChangeFields,
   buildTabPostbackFields,
   extractPartialResponse,

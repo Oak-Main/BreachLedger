@@ -115,3 +115,39 @@ test('the apply phase refuses a sql file that no manifest lists', () => {
   assert.match(res.out, /listed by no manifest/);
   assert.match(res.out, /stale\.batch-001\.sql/);
 });
+
+// --- Structural guarantees, pinned against the source -----------------------
+//
+// The behavioural tests above cover the refusals. These two pin the two
+// properties that the behaviour rests on and that no unit test can observe
+// without a live database: that the stage writes nothing, and that the apply
+// phase is ONE database operation.
+
+test('the staging phase never writes to D1', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  const stageBranch = source.slice(
+    source.indexOf('if (stageDir) {'),
+    source.indexOf('if (!statements.length) {')
+  );
+  assert.ok(stageBranch.length > 0, 'the staging branch must exist');
+  assert.ok(
+    !stageBranch.includes('d1File('),
+    'the staging phase must not write to D1'
+  );
+  assert.match(source, /no D1 write in this phase/);
+});
+
+test('the apply phase performs exactly ONE database write', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  const applyFn = source.slice(
+    source.indexOf('function applyStaged('),
+    source.indexOf('async function main(')
+  );
+  assert.ok(applyFn.length > 0, 'the apply phase must exist');
+  const writes = applyFn.match(/d1File\(/g) || [];
+  assert.equal(
+    writes.length, 1,
+    `the apply phase must write in ONE operation, found ${writes.length} writes`
+  );
+  assert.match(applyFn, /in ONE D1 operation/);
+});
