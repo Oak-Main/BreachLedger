@@ -139,12 +139,26 @@ test('a session id in the query string never reaches the manifest', () => {
       retrieved_at: '2026-10-29T00:00:00.000Z',
       requested_url: 'https://ocrportal.hhs.gov/x.jsf',
       final_url: 'https://ocrportal.hhs.gov/x.jsf;jsessionid=SECRET',
+      // The raw export steps carry the response's final URL, session id and
+      // all. They are retained in the manifest, so they must be redacted too.
+      steps: {
+        path: 'direct-grid',
+        final_url: 'https://ocrportal.hhs.gov/x.jsf;jsessionid=SECRET',
+        csvCommand: 'ocrForm:j_idt386',
+      },
     }],
     viewStats: new Map(),
     totalRows: 1, distinct: 1, valid: 1, rejected: 0,
     stats: {}, statements: 1, staged: null, env: {},
   });
   assert.ok(!JSON.stringify(m).includes('SECRET'), 'no session id may appear in the manifest');
+  assert.ok(!JSON.stringify(m).includes('jsessionid=SECRET'), 'no session id may appear in the manifest');
+  assert.equal(
+    m.views[0].export.final_url,
+    'https://ocrportal.hhs.gov/x.jsf',
+    'the export steps must be redacted'
+  );
+  assert.equal(m.views[0].export.csvCommand, 'ocrForm:j_idt386', 'the rest of the export steps must survive');
 });
 
 test('the applied receipt binds the written bytes to the manifest that described them', () => {
