@@ -98,8 +98,9 @@ jobs:
           DRY=""
           if [ "$INGEST_DRY_RUN" = "true" ]; then DRY="--dry-run"; fi
           STAGE=/tmp/ingest-staged
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE"
+          MANIFEST=/tmp/ingest-manifest
+          rm -rf "$STAGE" "$MANIFEST"
+          mkdir -p "$STAGE" "$MANIFEST"
           : > /tmp/ingest.log
 
           # PHASE 1 -- fetch, parse and validate EVERY source. Nothing is
@@ -111,7 +112,8 @@ jobs:
           for s in $SOURCES; do
             echo "=== ingest: $s (coverage=$INGEST_COVERAGE) ===" | tee -a /tmp/ingest.log
             node packages/ingest/run.js --source "$s" --remote \
-              --coverage "$INGEST_COVERAGE" $DRY --stage "$STAGE" 2>&1 | tee -a /tmp/ingest.log
+              --coverage "$INGEST_COVERAGE" $DRY --stage "$STAGE" \
+              --manifest-dir "$MANIFEST" 2>&1 | tee -a /tmp/ingest.log
           done
 
           # PHASE 2 -- write the staged statements, which are exactly the
@@ -141,6 +143,17 @@ jobs:
           name: ingest-rejects
           path: docs/ingest-rejects.log
           if-no-files-found: ignore
+
+      - name: Upload ingest manifest and applied receipt for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingest-manifest
+          path: |
+            /tmp/ingest-manifest
+            /tmp/ingest-staged/applied.json
+          if-no-files-found: ignore
+          retention-days: 90
 
       - name: Export build input from D1
         if: github.event.inputs.dry_run != 'true'

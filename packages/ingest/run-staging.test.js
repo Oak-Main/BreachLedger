@@ -116,6 +116,75 @@ test('the apply phase refuses a sql file that no manifest lists', () => {
   assert.match(res.out, /stale\.batch-001\.sql/);
 });
 
+test('the manifest is written on every execution path', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  // The location has a default, so a run that was not told where to put the
+  // manifest still produces one.
+  assert.match(source, /const manifestDir = arg\('manifest-dir',/);
+  assert.ok(!/if \(!manifestDir\) return null;/.test(source), 'the manifest may not be optional');
+  // The writer is invoked on the staged path, the dry-run path and the direct
+  // write path: three call sites.
+  const calls = source.match(/writeManifest\(/g) || [];
+  assert.equal(calls.length, 3, `writeManifest must be called on every path, found ${calls.length} call sites`);
+  assert.match(source, /writeManifest\(\{ batches: batchDigests \}\)/);
+  assert.match(source, /writeManifest\(\{ batches: \[\], note: 'dry run/);
+  assert.match(source, /writeManifest\(\{ batches: \[\], note: 'direct write/);
+});
+
+test('the apply phase refuses a staged batch whose digest does not match the manifest', () => {
+  // The digest was recorded when the batch was staged. If the file changed
+  // afterwards -- edited, truncated, corrupted in transit -- it must never be
+  // applied, even though the receipt would only report the difference after
+  // the write.
+  const dir = tmpDir();
+  const sql = 'INSERT INTO breaches (id) VALUES (\'x\');';
+  fs.writeFileSync(path.join(dir, 'hhs_ocr.batch-001.sql'), sql);
+  fs.writeFileSync(
+    path.join(dir, 'hhs_ocr.manifest.json'),
+    JSON.stringify({
+      source: 'hhs_ocr',
+      coverage: 'all',
+      statements: 1,
+      batches: ['hhs_ocr.batch-001.sql'],
+      batch_digests: [{
+        file: 'hhs_ocr.batch-001.sql',
+        sha256: require('crypto').createHash('sha256').update(sql).digest('hex'),
+        bytes: Buffer.byteLength(sql, 'utf8'),
+      }],
+      stats: {},
+    }),
+    'utf8'
+  );
+  // Now corrupt the staged file after it was staged.
+  fs.writeFileSync(path.join(dir, 'hhs_ocr.batch-001.sql'), 'DELETE FROM breaches;');
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.notEqual(res.code, 0, 'a tampered staged batch must not be applied');
+  assert.match(res.out, /does not match the/);
+  assert.ok(!fs.existsSync(path.join(dir, 'applied.json')), 'no receipt may be written for a refused stage');
+});
+
+test('a no-op apply still writes an applied receipt', () => {
+  // "Validated and nothing to write" is an outcome, and the receipt has to
+  // say so -- otherwise a run that changed nothing looks like a run whose
+  // receipt was lost.
+  const dir = tmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'hhs_ocr.manifest.json'),
+    JSON.stringify({
+      source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], batch_digests: [], stats: {},
+    }),
+    'utf8'
+  );
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.equal(res.code, 0, res.out);
+  assert.match(res.out, /every staged source reported no changes/);
+  const receipt = path.join(dir, 'applied.json');
+  assert.ok(fs.existsSync(receipt), 'a no-op apply must still write an applied receipt');
+  const parsed = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+  assert.equal(parsed.schema, 'breachledger/ingest-applied@1');
+  assert.deepEqual(parsed.sources[0].applied_batches, []);
+});
+
 // --- Structural guarantees, pinned against the source -----------------------
 //
 // The behavioural tests above cover the refusals. These two pin the two

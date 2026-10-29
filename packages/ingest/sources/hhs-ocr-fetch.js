@@ -17,6 +17,7 @@
 
 const { politeFetch, USER_AGENT } = require('../fetch-util');
 const jsf = require('./hhs-jsf');
+const { safeUrl } = require('../manifest');
 const tv = require('./hhs-tabview');
 
 const BASE = 'https://ocrportal.hhs.gov/ocr/breach/';
@@ -228,6 +229,9 @@ async function fetchBreachCsv({ fetchImpl = politeFetch, gridPage = GRID_PAGE, l
       bytes: result.csv.body.length,
       checksum: result.csv.checksum,
       retrieved_at: result.csv.retrieved_at,
+      // The export response's final URL, so the manifest can record which
+      // document was actually fetched.
+      final_url: result.csv.final_url,
       attemptsBeforeSuccess: attempts.length,
     },
   };
@@ -252,6 +256,8 @@ function describeTabState(state) {
   return `activeIndex=${idx}, archivePanelVisible=${vis}`;
 }
 
+
+
 /**
  * Fetch every view of the breach report.
  *
@@ -272,6 +278,8 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
     csv: current.csv,
     checksum: current.steps.checksum,
     retrieved_at: current.steps.retrieved_at,
+    requested_url: gridPage,
+    final_url_safe: safeUrl(current.steps.final_url),
     gridReportsEmpty: current.gridReportsEmpty,
     steps: current.steps,
   });
@@ -523,6 +531,8 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
     csv: archived.csv.body,
     checksum: archived.csv.checksum,
     retrieved_at: archived.csv.retrieved_at,
+    requested_url: gridPage,
+    final_url_safe: safeUrl(archived.csv.final_url),
     gridReportsEmpty: archived.gridReportsEmpty,
     // How the archive view was proven to BE the archive: distinct rows, or the
     // server's own report of the selected tab. Recorded so the distinction

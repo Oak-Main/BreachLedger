@@ -98,3 +98,49 @@ test('batching splits statements into chunks', () => {
   assert.equal(files[0].split('\n').length, 400);
   assert.equal(files[2].split('\n').length, 150);
 });
+
+test('the insert statements are idempotent, so a partially applied stage can be re-applied', () => {
+  // The remote import path's all-or-nothing behaviour is not established, so
+  // the staged write must not DEPEND on it: re-applying the same stage has to
+  // converge on the same state. An upsert does that; a plain INSERT would
+  // fail on the primary key of a row the first attempt had already written.
+  const { statements } = buildStatements(
+    [rec({ sources: [{ id: 's1', source_type: 'hhs_ocr', source_url: 'https://x.gov/a', retrieved_at: NOW, checksum: 'c' }] })],
+    new Map(), new Set(), NOW
+  );
+  const insert = statements.find((s) => s.startsWith('INSERT INTO breaches'));
+  assert.ok(insert, 'a new breach must emit an insert');
+  assert.match(insert, /ON CONFLICT\(id\) DO UPDATE SET/);
+  const sourceInsert = statements.find((s) => s.startsWith('INSERT INTO sources'));
+  assert.ok(sourceInsert, 'a new source row must emit an insert');
+  assert.match(sourceInsert, /ON CONFLICT\(id\) DO UPDATE SET/);
+});
+
+test('a stale stage must not roll back newer content', () => {
+  // The upsert makes a re-applied stage converge, but it must not let a stage
+  // that is OLDER than the database overwrite newer rows. A plain INSERT used
+  // to fail loudly here; the upsert carries its own staleness guard instead.
+  const { statements } = buildStatements(
+    [rec({ sources: [{ id: 's1', source_type: 'hhs_ocr', source_url: 'https://x.gov/a', retrieved_at: NOW, checksum: 'c' }] })],
+    new Map(), new Set(), NOW
+  );
+  const insert = statements.find((s) => s.startsWith('INSERT INTO breaches'));
+  assert.ok(insert, 'a new breach must emit an insert');
+  assert.match(insert, /WHERE excluded\.updated_at >= breaches\.updated_at/);
+  const sourceInsert = statements.find((s) => s.startsWith('INSERT INTO sources'));
+  assert.ok(sourceInsert, 'a new source row must emit an insert');
+  assert.match(sourceInsert, /WHERE excluded\.retrieved_at >= sources\.retrieved_at/);
+});
+
+test('the upsert never rewrites first_seen_at', () => {
+  // first_seen_at is the row's original observation. Re-applying a stage
+  // must not move it, or a recovery would silently restate history.
+  const { statements } = buildStatements([rec()], new Map(), new Set(), NOW);
+  const insert = statements.find((s) => s.startsWith('INSERT INTO breaches'));
+  assert.ok(insert, 'a new breach must emit an insert');
+  assert.ok(
+    !/first_seen_at\s*=\s*excluded\.first_seen_at/.test(insert),
+    'the conflict branch must not overwrite first_seen_at'
+  );
+  assert.match(insert, /updated_at = excluded\.updated_at/);
+});

@@ -531,8 +531,39 @@ test('an archive that is a superset of the recent view is refused', async () => 
   );
 });
 
-test('a wrong-panel exporter is rejected while a correct one is accepted', async () => {
-  // Two CSV exporters in the switch response: the first exports the RECENT
+test('an ambiguous response with two exporters, neither of which passes, is refused', async () => {
+  // Two CSV exporters, and NEITHER export is a distinct older dataset. There
+  // is no basis for choosing between them, so the archive is refused rather
+  // than one of them being picked.
+  const twoExporters =
+    '<?xml version="1.0"?><partial-response><changes>' +
+    '<update id="ocrForm:j_idt31"><![CDATA[<div>' +
+    '<input type="hidden" name="ocrForm:j_idt31_activeIndex" value="1">' +
+    '<div id="ocrForm:j_idt31:archiveTab" class="ui-tabs-panel ui-widget-content ui-corner-bottom">' +
+    '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt500\':\'x\'},\'\')">' +
+    '<img alt="CSV" src="/i/csv.png"></a>' +
+    '<a onclick="mojarra.jsfcljs(document.getElementById(\'ocrForm\'),{\'ocrForm:j_idt501\':\'x\'},\'\')">' +
+    '<img alt="CSV" src="/i/csv.png"></a></div></div>]]></update>' +
+    '<update id="j_id1:javax.faces.ViewState:0"><![CDATA[VS-ARCHIVE]]></update>' +
+    '</changes></partial-response>';
+  const impl = async (url, opts = {}) => {
+    const body = String(opts.body || '');
+    if ((opts.method || 'GET') === 'GET') {
+      return { body: TABBED_GRID, checksum: 'g', retrieved_at: 'T' };
+    }
+    if (body.includes('tabChange') || body.includes('_activeIndex=1')) {
+      return { body: twoExporters, checksum: 'p', retrieved_at: 'T' };
+    }
+    // BOTH exporters return the recent view: neither is a distinct older dataset.
+    return { body: CSV, checksum: 'c', retrieved_at: 'T' };
+  };
+  await assert.rejects(
+    () => fetchAllViews({ fetchImpl: impl }),
+    /not a distinct older dataset|same data rows/
+  );
+});
+
+test('a wrong-panel exporter is rejected while a correct one is accepted', async () => {  // Two CSV exporters in the switch response: the first exports the RECENT
   // table (a superset of it), the second exports the real archive. The wrong
   // one must not become the archive.
   const twoExporters =
