@@ -886,3 +886,61 @@ test('the tab-change request refreshes the portal-declared results table as well
   assert.equal(observed, true);
   assert.equal(views[1].archiveVerification, 'verified');
 });
+
+test('current-view export timeouts also retry from a fresh uncached grid', async () => {
+  const { impl } = mockPortal();
+  let grids = 0;
+  let posts = 0;
+  const wrapped = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'GET') {
+      grids++;
+      assert.equal(opts.headers['Cache-Control'], 'no-cache');
+    } else if (++posts === 1) {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }
+    return impl(url, opts);
+  };
+  const view = await fetchBreachCsv({ fetchImpl: wrapped });
+  assert.equal(view.csv, CSV);
+  assert.equal(view.steps.sessionAttempt, 2);
+  assert.equal(grids, 2);
+  assert.equal(posts, 2);
+});
+
+test('redirected CSV is refused before format acceptance and cannot masquerade as the archive', async () => {
+  const { impl } = mockTabbedPortal();
+  let redirected = 0;
+  const wrapped = async (url, opts) => {
+    const res = await impl(url, opts);
+    if (res.body === ARCHIVE_CSV) {
+      redirected++;
+      return { ...res, redirected: true, final_url: PART2_GRID_PAGE };
+    }
+    return res;
+  };
+  await assert.rejects(() => fetchAllViews({ fetchImpl: wrapped }), /export followed a redirect/);
+  assert.equal(redirected, 2, 'retry is bounded to two sessions');
+});
+
+test('CSV from the wrong endpoint is refused even without a redirect flag', async () => {
+  const { impl } = mockTabbedPortal();
+  const wrapped = async (url, opts) => {
+    const res = await impl(url, opts);
+    return res.body === ARCHIVE_CSV ? { ...res, final_url: PART2_GRID_PAGE } : res;
+  };
+  await assert.rejects(() => fetchAllViews({ fetchImpl: wrapped }), /different report or origin/);
+});
+
+test('a grid GET timeout retries with a fresh session while validation failures stay fatal', async () => {
+  const { impl } = mockPortal();
+  let gets = 0;
+  const wrapped = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'GET' && gets++ === 0) throw new DOMException('grid timeout', 'TimeoutError');
+    return impl(url, opts);
+  };
+  assert.equal((await fetchBreachCsv({ fetchImpl: wrapped })).steps.sessionAttempt, 2);
+  assert.equal(gets, 2);
+  let invalidGets = 0;
+  await assert.rejects(() => fetchBreachCsv({ fetchImpl: async () => { invalidGets++; return { body: '<html>wrong report</html>' }; } }), /does not identify itself/);
+  assert.equal(invalidGets, 1);
+});

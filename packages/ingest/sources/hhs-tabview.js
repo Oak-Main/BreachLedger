@@ -69,7 +69,7 @@ function buildTabChangeFields(hidden, tabView, tabIndex, tabClientId, renderTarg
  */
 function findTabChangeRenderTargets(html, tabView) {
   if (!tabView) return [];
-  for (const script of String(html).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+  for (const script of String(html).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
     for (const match of script[1].matchAll(/PrimeFaces\.ab\(\{([^{}]+)/g)) {
       const field = (key) => new RegExp(`(?:^|,)\\s*${key}\\s*:\\s*(["'])(.*?)\\1`).exec(match[1])?.[2];
       if (field('s') === tabView.id && field('e') === 'tabChange') {

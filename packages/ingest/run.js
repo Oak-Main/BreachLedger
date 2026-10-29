@@ -147,7 +147,10 @@ function applyStaged(dir, remote, expectSources) {
     // must not be able to name a manifest that has changed since it was
     // staged.
     const dm = m.durable_manifest;
-    if (dm && dm.file) {
+    if (!dm || typeof dm.file !== 'string' || !dm.file || !/^[a-f0-9]{64}$/.test(dm.sha256 || '')) {
+      throw new Error(`ingest: refusing to apply the stage: source ${m.source} has no valid durable-manifest reference`);
+    }
+    {
       const actualManifest = fs.existsSync(dm.file)
         ? require('crypto').createHash('sha256').update(fs.readFileSync(dm.file)).digest('hex')
         : null;
@@ -158,7 +161,20 @@ function applyStaged(dir, remote, expectSources) {
         );
       }
     }
-    for (const d of m.batch_digests || []) {
+    const durable = JSON.parse(fs.readFileSync(dm.file, 'utf8'));
+    const digests = m.batch_digests;
+    const publishedBatches = durable.staged?.batches;
+    const canonical = (items) => items.map(({ file, sha256, bytes }) => ({ file, sha256, bytes }));
+    if (durable.schema !== 'breachledger/ingest-manifest@1' ||
+        durable.source?.id !== m.source || durable.source?.coverage !== m.coverage ||
+        durable.source?.dry_run !== false || durable.write?.statements !== m.statements ||
+        !Array.isArray(digests) || !Array.isArray(publishedBatches) ||
+        JSON.stringify(canonical(digests)) !== JSON.stringify(canonical(publishedBatches)) ||
+        JSON.stringify(digests.map((d) => d.file)) !== JSON.stringify(m.batches) ||
+        digests.some((d) => !/^[a-f0-9]{64}$/.test(d.sha256 || '') || !Number.isSafeInteger(d.bytes) || d.bytes < 0)) {
+      throw new Error(`ingest: refusing to apply the stage: source ${m.source} does not match its validated durable manifest`);
+    }
+    for (const d of digests) {
       const full = path.join(dir, d.file);
       const actual = fs.existsSync(full)
         ? require('crypto').createHash('sha256').update(fs.readFileSync(full)).digest('hex')
@@ -559,7 +575,8 @@ main().catch((err) => {
   // sanitised failure receipt too; it is never an applied-data receipt.
   const sourceId = arg('source', 'hhs_ocr');
   if (!arg('apply') && SOURCES[sourceId]) {
-    const dir = arg('manifest-dir', path.join(ROOT, '.wrangler', 'ingest-manifest'));
+    const dir = arg('manifest-dir',
+      process.env.INGEST_MANIFEST_DIR || path.join(require('os').tmpdir(), 'breachledger-ingest-manifest'));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${sourceId}.failure.json`), JSON.stringify({
       schema: 'breachledger/ingest-failure@1',

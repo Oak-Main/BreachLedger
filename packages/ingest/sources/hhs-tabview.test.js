@@ -183,3 +183,8 @@ test('discovers the live tabChange results render targets alongside the selected
   assert.equal(fields['javax.faces.partial.render'], 'ocrForm:j_idt912 ocrForm:breachReports ocrForm:results');
   assert.deepEqual(findTabChangeRenderTargets('<script>PrimeFaces.ab({s:"other",e:"tabChange",u:"other:results"})</script>', tab), []);
 });
+
+test('render-target discovery accepts whitespace in a script closing tag', () => {
+  const { findTabChangeRenderTargets } = require('./hhs-tabview');
+  assert.deepEqual(findTabChangeRenderTargets('<script>PrimeFaces.ab({s:"form:tabs",e:"tabChange",u:"form:records"});</script >', { id: 'form:tabs' }), ['form:records']);
+});

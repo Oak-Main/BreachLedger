@@ -46,6 +46,19 @@ function restartSession(message) {
   return err;
 }
 
+async function sessionFetch(fetchImpl, url, options) {
+  try {
+    return await fetchImpl(url, options);
+  } catch (err) {
+    const code = err.code || err.cause?.code;
+    if (['TimeoutError', 'AbortError', 'TypeError'].includes(err.name) ||
+        ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'].includes(code)) {
+      throw restartSession(`session request failed: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
 // Text that must appear on each grid for it to be the grid we asked for.
 // A non-deterministic postback or a future redirect could hand us the other
 // regime's page; without a positive check, a Part 2 run that landed on the
@@ -130,7 +143,7 @@ async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts,
   for (const enc of jsf.commandEncodings(hidden, commandId)) {
     let res;
     try {
-      res = await fetchImpl(action, {
+      res = await sessionFetch(fetchImpl, action, {
         raw: true,
         jar,
         method: 'POST',
@@ -144,7 +157,13 @@ async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts,
       // Never try another encoding with that session's token and exporter id.
       throw restartSession(attempts.join('\n'));
     }
+    if (res.redirected === true) {
+      throw restartSession(`export[${enc.name}]${tag}: export followed a redirect`);
+    }
     if (jsf.looksLikeCsv(res.body)) {
+      if (safeUrl(res.final_url || action) !== safeUrl(action)) {
+        throw new Error('export response came from a different report or origin; refusing CSV');
+      }
       return { res, encoding: enc.name };
     }
     attempts.push(
@@ -186,7 +205,7 @@ async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_
   const attempts = [];
 
   // --- Primary: the data grid, fetched directly --------------------------
-  const direct = await fetchImpl(gridPage, { raw: true, jar });
+  const direct = await sessionFetch(fetchImpl, gridPage, { raw: true, jar, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
   assertGridIdentity(gridPage, direct, label);
   let result = await exportFromPage({
     fetchImpl, jar, pageUrl: gridPage, pageBody: direct.body, attempts, pathName: 'direct-grid',
@@ -195,7 +214,7 @@ async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_
   // --- Fallback: navigate from the front page ----------------------------
   // Only meaningful for the HIPAA grid; the Part 2 grid is reached directly.
   if (!result && gridPage === GRID_PAGE) {
-    const front = await fetchImpl(FRONT_PAGE, { raw: true, jar });
+    const front = await sessionFetch(fetchImpl, FRONT_PAGE, { raw: true, jar, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
     const frontHidden = jsf.extractHiddenInputs(front.body);
     const gridCommand = jsf.findCommandByLabel(front.body, GRID_LABEL);
     if (jsf.extractViewState(frontHidden) && gridCommand) {
@@ -203,7 +222,7 @@ async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_
       // The navigation postback needs a decodable encoding too, for exactly the
       // same reason the export does.
       for (const enc of jsf.commandEncodings(frontHidden, gridCommand)) {
-        const grid = await fetchImpl(frontAction, {
+        const grid = await sessionFetch(fetchImpl, frontAction, {
           raw: true,
           jar,
           method: 'POST',
@@ -342,7 +361,7 @@ async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = 
   // shell. Each alternative must start with its OWN fresh grid and cookie jar.
   for (const variantName of ['ajax-tabchange', 'plain-postback']) {
     const jar = new CookieJar();
-    const grid = await fetchImpl(gridPage, { raw: true, jar });
+    const grid = await sessionFetch(fetchImpl, gridPage, { raw: true, jar, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
     assertGridIdentity(gridPage, grid, label);
     // Discovery aid: what other portal pages exist, for locating the archive.
     const linked = jsf.linkedPages(grid.body);
@@ -382,7 +401,7 @@ async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = 
     const body = new URLSearchParams(variant.fields).toString();
     let res;
     try {
-      res = await fetchImpl(gridAction, {
+      res = await sessionFetch(fetchImpl, gridAction, {
         raw: true, jar, method: 'POST', body,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });

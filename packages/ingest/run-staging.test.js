@@ -23,6 +23,21 @@ function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'breachledger-stage-'));
 }
 
+function writeBoundStage(dir, stage) {
+  const durable = path.join(dir, `${stage.source}.durable.json`);
+  const digests = stage.batch_digests || [];
+  fs.writeFileSync(durable, JSON.stringify({
+    schema: 'breachledger/ingest-manifest@1',
+    source: { id: stage.source, coverage: stage.coverage, dry_run: false },
+    write: { statements: stage.statements },
+    staged: { batches: digests },
+  }));
+  fs.writeFileSync(path.join(dir, `${stage.source}.manifest.json`), JSON.stringify({
+    ...stage, batch_digests: digests,
+    durable_manifest: { file: durable, sha256: require('crypto').createHash('sha256').update(fs.readFileSync(durable)).digest('hex') },
+  }));
+}
+
 function apply(stageDir, extraArgs = []) {
   const res = spawnSync(process.execPath, [RUN, '--apply', stageDir, ...extraArgs], {
     encoding: 'utf8',
@@ -54,11 +69,7 @@ test('the apply phase refuses when a source produced no validated data', () => {
 test('a stage whose sources all report no changes applies nothing and succeeds', () => {
   const dir = tmpDir();
   for (const source of ['hhs_ocr', 'hhs_part2']) {
-    fs.writeFileSync(
-      path.join(dir, `${source}.manifest.json`),
-      JSON.stringify({ source, coverage: 'all', statements: 0, batches: [], stats: {} }),
-      'utf8'
-    );
+    writeBoundStage(dir, { source, coverage: 'all', statements: 0, batches: [], stats: {} });
   }
   const res = apply(dir, ['--expect-sources', 'hhs_ocr,hhs_part2']);
   assert.equal(res.code, 0, res.out);
@@ -68,11 +79,7 @@ test('a stage whose sources all report no changes applies nothing and succeeds',
 
 test('the apply phase refuses when a source is missing from the expectation list', () => {
   const dir = tmpDir();
-  fs.writeFileSync(
-    path.join(dir, 'hhs_ocr.manifest.json'),
-    JSON.stringify({ source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], stats: {} }),
-    'utf8'
-  );
+  writeBoundStage(dir, { source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], stats: {} });
   // Expecting only hhs_ocr is satisfied; the guard is about MISSING sources.
   const ok = apply(dir, ['--expect-sources', 'hhs_ocr']);
   assert.equal(ok.code, 0, ok.out);
@@ -156,6 +163,7 @@ test('the apply phase refuses a staged batch whose digest does not match the man
     'utf8'
   );
   // Now corrupt the staged file after it was staged.
+  writeBoundStage(dir, JSON.parse(fs.readFileSync(path.join(dir, 'hhs_ocr.manifest.json'), 'utf8')));
   fs.writeFileSync(path.join(dir, 'hhs_ocr.batch-001.sql'), 'DELETE FROM breaches;');
   const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
   assert.notEqual(res.code, 0, 'a tampered staged batch must not be applied');
@@ -168,13 +176,9 @@ test('a no-op apply still writes an applied receipt', () => {
   // say so -- otherwise a run that changed nothing looks like a run whose
   // receipt was lost.
   const dir = tmpDir();
-  fs.writeFileSync(
-    path.join(dir, 'hhs_ocr.manifest.json'),
-    JSON.stringify({
+  writeBoundStage(dir, {
       source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], batch_digests: [], stats: {},
-    }),
-    'utf8'
-  );
+  });
   const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
   assert.equal(res.code, 0, res.out);
   assert.match(res.out, /every staged source reported no changes/);
@@ -259,5 +263,29 @@ test('a failed source leaves a failure receipt without claiming validated or app
   assert.equal(receipt.source, 'hhs_ocr');
   assert.match(receipt.error, /ENOENT/);
   assert.equal(fs.existsSync(path.join(dir, 'hhs_ocr.manifest.json')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
+});
+
+for (const reference of [undefined, {}, { file: 'missing.json', sha256: 'invalid' }]) {
+  test(`a legacy no-op stage without a valid durable reference is refused (${JSON.stringify(reference)})`, () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'hhs_ocr.manifest.json'), JSON.stringify({ source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], batch_digests: [], durable_manifest: reference }));
+    const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+    assert.notEqual(res.code, 0);
+    assert.match(res.out, /no valid durable-manifest reference/);
+    assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
+  });
+}
+
+test('stage metadata cannot name a different source or invent batches beside a valid durable manifest', () => {
+  const dir = tmpDir();
+  writeBoundStage(dir, { source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [] });
+  const file = path.join(dir, 'hhs_ocr.manifest.json');
+  const stage = JSON.parse(fs.readFileSync(file));
+  stage.source = 'hhs_part2';
+  fs.writeFileSync(file, JSON.stringify(stage));
+  const res = apply(dir, ['--expect-sources', 'hhs_part2']);
+  assert.notEqual(res.code, 0);
+  assert.match(res.out, /does not match its validated durable manifest/);
   assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
 });

@@ -51,7 +51,8 @@ each page's widget rather than hardcoding them.
 ## Correction and acceptance policy
 
 - Bound each CSV export at 90 seconds and permit at most two complete source
-  sessions. A transport failure, JSF redirect/error or changed ViewState discards
+  sessions. Session pages request no-cache so an intermediary cannot deliberately
+  reuse a previously rendered token. A transport failure, JSF redirect/error or changed ViewState discards
   the uncertain session. Rediscover cookies, tokens and generated ids, and
   re-fetch both source views before considering success.
 - Discover the actual tabChange render targets, including the results table,
@@ -73,3 +74,25 @@ changed response state, redirects, failed archive selection after retry, declare
 render-target changes, empty archives, redaction suffixes and tampered no-op
 manifests. Full source coverage must pass before staging can be applied. No
 production acceptance is inferred merely from tests or a green workflow badge.
+
+## Corrective PR review and safe validation
+
+[PR #20](https://github.com/Oak-Main/BreachLedger/pull/20) received independent
+Copilot and CodeQL review. Follow-up corrections reject redirected CSV before
+format acceptance, check the final export report/origin, retry transport failures
+on grid/navigation requests too, accept whitespace in script closing tags, and
+require every staged source to bind to a digest-verified durable manifest.
+Source, coverage, dry-run status, statement counts and ordered batch digests must
+agree with that durable manifest; unbound legacy stages are rejected. Failure
+receipts use the same default/environment-selected directory as normal manifests.
+
+Local verification after these corrections: **617 tests passed**, zero failed or
+skipped; typecheck passed (18 files). The empty-data build smoke test also passed.
+
+[Full-coverage dry run 40919381366](https://github.com/Oak-Main/BreachLedger/actions/runs/40919381366)
+at the initial corrective revision independently verified 761 current HIPAA rows,
+7,305 archive rows and 7,985 distinct valid records with zero rejected. It
+calculated one insertion and one new source row, without writing either. Both
+Part 2 views were verified empty from server state and the grid. Export, build
+and deployment were correctly skipped. Final-revision dry-run and publication
+acceptance remain separate release evidence.
