@@ -17,7 +17,7 @@
 
 const { politeFetch, USER_AGENT } = require('../fetch-util');
 const jsf = require('./hhs-jsf');
-const { safeUrl } = require('../manifest');
+const { safeUrl, redact } = require('../manifest');
 const tv = require('./hhs-tabview');
 
 const BASE = 'https://ocrportal.hhs.gov/ocr/breach/';
@@ -35,6 +35,16 @@ const GRID_PAGE = `${BASE}breach_report_hip.jsf`;
 // the HIPAA grid and why this file now checks what it actually received.
 const PART2_GRID_PAGE = `${BASE}breach_report_part2.jsf`;
 const GRID_LABEL = 'View HIPAA Breach Reports';
+// The full HIPAA archive is >5 MB. Keep the request bounded without using the
+// 30-second small-page budget that aborted run 40900052070 mid-export.
+const EXPORT_TIMEOUT_MS = 90_000;
+const MAX_EXPORT_SESSION_ATTEMPTS = 2;
+
+function restartSession(message) {
+  const err = new Error(redact(message));
+  err.retryFreshSession = true;
+  return err;
+}
 
 // Text that must appear on each grid for it to be the grid we asked for.
 // A non-deterministic postback or a future redirect could hand us the other
@@ -55,11 +65,11 @@ const GRID_IDENTITY = {
  * that renders a different view at the same address.
  */
 function assertGridIdentity(gridPage, res, label) {
-  const wantPath = new URL(gridPage).pathname;
-  const gotPath = new URL(res.final_url || gridPage).pathname;
-  if (gotPath !== wantPath) {
+  const want = new URL(safeUrl(gridPage));
+  const got = new URL(safeUrl(res.final_url || gridPage));
+  if (got.origin !== want.origin || got.pathname !== want.pathname) {
     throw new Error(
-      `${label}: requested ${gridPage} but the response came from ${res.final_url} ` +
+      `${label}: requested ${gridPage} but the response came from ${safeUrl(res.final_url)} ` +
         `(redirected=${res.redirected}). Refusing to ingest one report's data as another's.`
     );
   }
@@ -115,7 +125,7 @@ class CookieJar {
  * that is actually CSV. Returns the CSV response, or null with the attempts
  * recorded for diagnosis.
  */
-async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts, label = '' }) {
+async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts, label = '', restartOnFailure = true }) {
   const tag = label ? ` ${label}` : '';
   for (const enc of jsf.commandEncodings(hidden, commandId)) {
     let res;
@@ -124,19 +134,31 @@ async function postExport({ fetchImpl, jar, action, hidden, commandId, attempts,
         raw: true,
         jar,
         method: 'POST',
+        timeoutMs: EXPORT_TIMEOUT_MS,
         body: enc.body,
         headers: { 'Content-Type': enc.contentType },
       });
     } catch (err) {
-      attempts.push(`export[${enc.name}]${tag}: request failed: ${err.message}`);
-      continue;
+      attempts.push(redact(`export[${enc.name}]${tag}: request failed: ${err.message}`));
+      // A timeout/transport error leaves the server-side JSF view uncertain.
+      // Never try another encoding with that session's token and exporter id.
+      throw restartSession(attempts.join('\n'));
     }
     if (jsf.looksLikeCsv(res.body)) {
       return { res, encoding: enc.name };
     }
     attempts.push(
-      `export[${enc.name}]${tag}: ${res.body.length} bytes, not CSV (${jsf.excerpt(res.body, 120)})`
+      redact(`export[${enc.name}]${tag}: ${res.body.length} bytes, not CSV (${jsf.excerpt(res.body, 120)})`)
     );
+    const partial = tv.extractPartialResponse(res.body);
+    const nextState = partial.viewState || jsf.extractViewState(jsf.extractHiddenInputs(partial.html));
+    if (restartOnFailure && (
+      /<(?:redirect|error)\b/i.test(res.body) ||
+      (nextState && nextState !== jsf.extractViewState(hidden)) ||
+      (res.redirected === true)
+    )) {
+      throw restartSession(`${attempts.join('\n')}\nexport response changed the JSF view; restarting from a fresh grid`);
+    }
   }
   return null;
 }
@@ -159,7 +181,7 @@ async function exportFromPage({ fetchImpl, jar, pageUrl, pageBody, attempts, pat
   return { csv: got.res, commandId, encoding: got.encoding, path: pathName };
 }
 
-async function fetchBreachCsv({ fetchImpl = politeFetch, gridPage = GRID_PAGE, label = 'hhs_ocr' } = {}) {
+async function fetchBreachCsvAttempt({ fetchImpl = politeFetch, gridPage = GRID_PAGE, label = 'hhs_ocr' } = {}) {
   const jar = new CookieJar();
   const attempts = [];
 
@@ -226,7 +248,7 @@ async function fetchBreachCsv({ fetchImpl = politeFetch, gridPage = GRID_PAGE, l
       path: result.path,
       encoding: result.encoding,
       csvCommand: result.commandId,
-      bytes: result.csv.body.length,
+      bytes: Buffer.byteLength(result.csv.body, 'utf8'),
       checksum: result.csv.checksum,
       retrieved_at: result.csv.retrieved_at,
       // The export response's final URL, so the manifest can record which
@@ -235,6 +257,33 @@ async function fetchBreachCsv({ fetchImpl = politeFetch, gridPage = GRID_PAGE, l
       attemptsBeforeSuccess: attempts.length,
     },
   };
+}
+
+/** A retry must rediscover the session, ViewState and generated command ids. */
+async function withFreshSession(operation, label) {
+  const recoveries = [];
+  for (let attempt = 1; attempt <= MAX_EXPORT_SESSION_ATTEMPTS; attempt++) {
+    try {
+      const result = await operation();
+      const views = Array.isArray(result) ? result : [result];
+      for (const view of views) {
+        view.steps.sessionAttempt = attempt;
+        view.steps.recoveredSessions = recoveries;
+      }
+      return result;
+    } catch (err) {
+      if (!err.retryFreshSession || attempt === MAX_EXPORT_SESSION_ATTEMPTS) {
+        if (recoveries.length) err.message = `${recoveries.join('\n')}\n${err.message}`;
+        throw err;
+      }
+      recoveries.push(redact(`session ${attempt}: ${err.message}`));
+      console.error(`${label}: export session ${attempt} failed; retrying with fresh page state`);
+    }
+  }
+}
+
+async function fetchBreachCsv(options = {}) {
+  return withFreshSession(() => fetchBreachCsvAttempt(options), options.label || 'hhs_ocr');
 }
 
 // The grid shows one of two views at a time. "Under Investigation" holds only
@@ -268,11 +317,11 @@ function describeTabState(state) {
  *
  * @returns {Array<{view, csv, checksum, retrieved_at, steps}>}
  */
-async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, gridPage = GRID_PAGE, label = 'hhs_ocr' } = {}) {
+async function fetchAllViewsAttempt({ fetchImpl = politeFetch, requireArchive = true, gridPage = GRID_PAGE, label = 'hhs_ocr' } = {}) {
   const views = [];
 
   // View 1: whatever the grid shows by default (Under Investigation).
-  const current = await fetchBreachCsv({ fetchImpl, gridPage, label });
+  const current = await fetchBreachCsvAttempt({ fetchImpl, gridPage, label });
   views.push({
     view: 'under_investigation',
     csv: current.csv,
@@ -286,65 +335,68 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
 
   // View 2: Archive. It is the second tab of a PrimeFaces TabView, loaded on
   // demand, so it needs a real tabChange postback rather than a command click.
-  const jar = new CookieJar();
   const attempts = [];
-  const grid = await fetchImpl(gridPage, { raw: true, jar });
-  assertGridIdentity(gridPage, grid, label);
-  // Discovery aid: what other portal pages exist, for locating the archive.
-  const linked = jsf.linkedPages(grid.body);
-  if (linked.length) console.error(`${label}: .jsf pages linked from the grid: ${linked.join(' | ')}`);
-
-  const gridHidden = jsf.extractHiddenInputs(grid.body);
-  const gridAction = new URL(jsf.extractFormAction(grid.body) || gridPage, gridPage).toString();
-  const tabView = tv.findTabView(gridHidden);
-  const archiveTabId = tv.findTabId(grid.body, ARCHIVE_PATTERN);
-  // The archive's index in the navigation order, read from the grid page.
-  const archiveTabIndex = tv.findTabIndex(grid.body, archiveTabId);
-
-  if (!tabView || !archiveTabId) {
-    const err = new Error(
-      `${label}: could not locate the Archive tab on the report grid. Refusing to publish only ` +
-        'the last ~24 months as though it were the complete record.\n' +
-        `  tabView=${tabView ? tabView.id : 'none'} archiveTab=${archiveTabId || 'none'}\n` +
-        '  JSF commands on the grid:\n' +
-        jsf.listCommandCandidates(grid.body).map((c) => `    - ${c.commandId} label="${c.label}"`).join('\n') +
-        '\n  .jsf pages linked from the grid:\n' +
-        jsf.linkedPages(grid.body).map((l) => `    - ${l}`).join('\n')
-    );
-    err.archiveNotFound = true;
-    if (requireArchive) throw err;
-    console.error(`${label}: WARNING archive view not captured.\n${err.message}`);
-    return views;
-  }
-
-  console.error(`${label}: switching to archive tab ${archiveTabId} on tabview ${tabView.id}`);
-
-  // Two shapes of tab switch, because which one the server accepts is a
-  // configuration detail: a PrimeFaces AJAX tabChange, and a plain postback.
-  // The index posted is the archive's index in the navigation order, read
-  // from the grid page -- not an assumed 1 -- so a reordered TabView selects
-  // the tab that was actually found.
-  const switchIndex = archiveTabIndex === null ? 0 : archiveTabIndex;
-  const switchVariants = [
-    { name: 'ajax-tabchange', fields: tv.buildTabChangeFields(gridHidden, tabView, switchIndex, archiveTabId) },
-    { name: 'plain-postback', fields: tv.buildTabPostbackFields(gridHidden, tabView, switchIndex) },
-  ];
-
   let archived = null;
   let switchEvidence = null;
-  for (const variant of switchVariants) {
+  // An AJAX switch advances the ViewState even when it only renders the tab
+  // shell. Each alternative must start with its OWN fresh grid and cookie jar.
+  for (const variantName of ['ajax-tabchange', 'plain-postback']) {
+    const jar = new CookieJar();
+    const grid = await fetchImpl(gridPage, { raw: true, jar });
+    assertGridIdentity(gridPage, grid, label);
+    // Discovery aid: what other portal pages exist, for locating the archive.
+    const linked = jsf.linkedPages(grid.body);
+    if (linked.length) console.error(redact(`${label}: .jsf pages linked from the grid: ${linked.join(' | ')}`));
+
+    const gridHidden = jsf.extractHiddenInputs(grid.body);
+    const gridAction = new URL(jsf.extractFormAction(grid.body) || gridPage, gridPage).toString();
+    const tabView = tv.findTabView(gridHidden);
+    const archiveTabId = tv.findTabId(grid.body, ARCHIVE_PATTERN);
+    // The archive's index in the navigation order, read from the grid page.
+    const archiveTabIndex = tv.findTabIndex(grid.body, archiveTabId);
+
+    if (!tabView || !archiveTabId || archiveTabIndex === null || !jsf.extractViewState(gridHidden)) {
+      const err = new Error(
+        `${label}: could not locate the Archive tab on the report grid. Refusing to publish only ` +
+          'the last ~24 months as though it were the complete record.\n' +
+          `  tabView=${tabView ? tabView.id : 'none'} archiveTab=${archiveTabId || 'none'}\n` +
+          '  JSF commands on the grid:\n' +
+          jsf.listCommandCandidates(grid.body).map((c) => `    - ${c.commandId} label="${c.label}"`).join('\n') +
+          '\n  .jsf pages linked from the grid:\n' +
+          jsf.linkedPages(grid.body).map((l) => `    - ${l}`).join('\n')
+      );
+      err.archiveNotFound = true;
+      if (requireArchive) throw err;
+      console.error(`${label}: WARNING archive view not captured.\n${err.message}`);
+      return views;
+    }
+
+    console.error(`${label}: switching to archive tab ${archiveTabId} on tabview ${tabView.id}`);
+
+    const variant = {
+      name: variantName,
+      fields: variantName === 'ajax-tabchange'
+        ? tv.buildTabChangeFields(gridHidden, tabView, archiveTabIndex, archiveTabId, tv.findTabChangeRenderTargets(grid.body, tabView))
+        : tv.buildTabPostbackFields(gridHidden, tabView, archiveTabIndex),
+    };
     const body = new URLSearchParams(variant.fields).toString();
-    const res = await fetchImpl(gridAction, {
-      raw: true,
-      jar,
-      method: 'POST',
-      body,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
+    let res;
+    try {
+      res = await fetchImpl(gridAction, {
+        raw: true, jar, method: 'POST', body,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+    } catch (err) {
+      throw restartSession(`archive[${variant.name}]: switch request failed: ${err.message}`);
+    }
+    if (/<(?:redirect|error)\b/i.test(res.body) || res.redirected === true) {
+      throw restartSession(`archive[${variant.name}]: switch returned a redirect or JSF error`);
+    }
 
     // The response may be a PrimeFaces partial-response XML document; unwrap it
     // so the ordinary exporter scanners work on the rendered fragment.
     const { html, viewState, isPartial } = tv.extractPartialResponse(res.body);
+    if (!isPartial) assertGridIdentity(gridPage, res, label);
     const responseHidden = jsf.extractHiddenInputs(html);
     // The server reports which tab it selected. That answer does not depend on
     // how many rows came back, so it can settle a switch that the row
@@ -380,7 +432,7 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
       );
       continue;
     }
-    const merged = tv.mergeViewState(responseHidden, viewState)
+    const merged = tv.mergeViewState(responseHidden, viewState);
     const pageHidden = Object.keys(merged).length > 1 ? merged : tv.mergeViewState(gridHidden, viewState);
     // Which command is the CSV exporter is a per-render detail: the JSF client
     // ids are regenerated every time the grid is rendered, and a render can
@@ -405,7 +457,7 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
     for (const candidate of csvCommands) {
       const attempt = await postExport({
         fetchImpl, jar, action: gridAction, hidden: pageHidden,
-        commandId: candidate, attempts, label: ` ${variant.name}:${candidate}`,
+        commandId: candidate, attempts, label: `${variant.name}:${candidate}`, restartOnFailure: true,
       });
       if (attempt) exports.push({ commandId: candidate, ...attempt });
     }
@@ -437,7 +489,7 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
       const archiveData = dataRowsOf(candidate.res.body);
       const archiveRows = archiveData.split('\n').map(normaliseRow).filter(Boolean);
       const archiveRowSet = new Set(archiveRows);
-      const bothEmpty = !archiveData.trim() && !recentData.trim();
+      const archiveEmpty = !archiveData.trim();
       const distinct = archiveData !== recentData;
 
       // The server's confirmation is required on EVERY path. A differing
@@ -452,11 +504,15 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
         continue;
       }
 
-      if (bothEmpty) {
+      if (archiveEmpty) {
         // Two empty exports are identical whichever tab was selected, so the
         // row comparison cannot tell a genuinely empty archive from a switch
         // that never happened. The server can: it says which tab it selected
         // and which panel it left visible.
+        if (!gridReportsEmpty(html) || csvCommands.length !== 1) {
+          attempts.push(`archive[${variant.name}]: empty export without an unambiguous empty archive grid`);
+          continue;
+        }
         got = candidate;
         csvCommand = candidate.commandId;
         verificationBasis = 'server-tab-state';
@@ -508,6 +564,7 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
       commandId: csvCommand,
       encoding: got.encoding,
       path: `archive[${variant.name}]`,
+      tabId: archiveTabId,
       gridReportsEmpty: gridReportsEmpty(html),
     };
     break;
@@ -545,10 +602,14 @@ async function fetchAllViews({ fetchImpl = politeFetch, requireArchive = true, g
       panelVisible: switchEvidence.panelVisible,
       serverConfirmed: switchEvidence.serverConfirmed,
     },
-    steps: { path: archived.path, encoding: archived.encoding, csvCommand: archived.commandId, tabId: archiveTabId, bytes: archived.csv.body.length },
+    steps: { path: archived.path, encoding: archived.encoding, csvCommand: archived.commandId, tabId: archived.tabId, bytes: Buffer.byteLength(archived.csv.body, 'utf8') },
   });
 
   return views;
 }
 
-module.exports = { fetchBreachCsv, fetchAllViews, assertGridIdentity, dataRowsOf, gridReportsEmpty, GRID_IDENTITY, CookieJar, FRONT_PAGE, GRID_PAGE, PART2_GRID_PAGE, GRID_LABEL, ARCHIVE_PATTERN, USER_AGENT };
+async function fetchAllViews(options = {}) {
+  return withFreshSession(() => fetchAllViewsAttempt(options), options.label || 'hhs_ocr');
+}
+
+module.exports = { fetchBreachCsv, fetchAllViews, assertGridIdentity, dataRowsOf, gridReportsEmpty, GRID_IDENTITY, CookieJar, EXPORT_TIMEOUT_MS, MAX_EXPORT_SESSION_ATTEMPTS, FRONT_PAGE, GRID_PAGE, PART2_GRID_PAGE, GRID_LABEL, ARCHIVE_PATTERN, USER_AGENT };

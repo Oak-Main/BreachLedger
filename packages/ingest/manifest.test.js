@@ -184,3 +184,17 @@ test('the applied receipt binds the written bytes to the manifest that described
     crypto.createHash('sha256').update('INSERT INTO breaches VALUES (1);').digest('hex')
   );
 });
+
+test('redaction preserves path, matrix parameter, query and fragment suffixes', () => {
+  const { redact, redactSteps } = require('./manifest');
+  const raw = 'https://ocrportal.hhs.gov/x.jsf;jsessionid=SECRET/next;mode=archive?view=all#data';
+  const expected = 'https://ocrportal.hhs.gov/x.jsf/next;mode=archive?view=all#data';
+  assert.equal(redact(raw), expected);
+  assert.equal(safeUrl(raw), 'https://ocrportal.hhs.gov/x.jsf/next;mode=archive');
+  assert.equal(redact('x.jsf;jsessionid=SECRET?view=all#data'), 'x.jsf?view=all#data');
+  assert.equal(redact('x.jsf?jsessionid=SECRET&view=all#data'), 'x.jsf?jsessionid=&view=all#data');
+  assert.equal(redact('x.jsf?jsessionid=SECRET#data'), 'x.jsf?jsessionid=#data');
+  const nested = redactSteps({ recovery: [raw, { url: raw }], retries: 0, ok: false });
+  assert.deepEqual(nested, { recovery: [expected, { url: expected }], retries: 0, ok: false });
+  assert.ok(!JSON.stringify(nested).includes('SECRET'));
+});

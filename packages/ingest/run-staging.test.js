@@ -233,3 +233,31 @@ test('the apply phase performs exactly ONE database write', () => {
   );
   assert.match(applyFn, /in ONE D1 operation/);
 });
+
+test('a no-op stage verifies the durable manifest before issuing a receipt', () => {
+  const dir = tmpDir();
+  const manifest = path.join(dir, 'durable.json');
+  fs.writeFileSync(manifest, '{"validated":true}\n');
+  const hash = require('crypto').createHash('sha256').update(fs.readFileSync(manifest)).digest('hex');
+  fs.writeFileSync(path.join(dir, 'hhs_ocr.manifest.json'), JSON.stringify({
+    source: 'hhs_ocr', coverage: 'all', statements: 0, batches: [], batch_digests: [],
+    durable_manifest: { file: manifest, sha256: hash },
+  }));
+  fs.writeFileSync(manifest, '{"validated":false}\n');
+  const res = apply(dir, ['--expect-sources', 'hhs_ocr']);
+  assert.notEqual(res.code, 0);
+  assert.match(res.out, /durable manifest.*does not match/);
+  assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
+});
+
+test('a failed source leaves a failure receipt without claiming validated or applied data', () => {
+  const dir = tmpDir();
+  const result = spawnSync(process.execPath, [RUN, '--source', 'hhs_ocr', '--from-file', path.join(dir, 'missing.csv'), '--manifest-dir', dir, '--dry-run'], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  const receipt = JSON.parse(fs.readFileSync(path.join(dir, 'hhs_ocr.failure.json'), 'utf8'));
+  assert.equal(receipt.schema, 'breachledger/ingest-failure@1');
+  assert.equal(receipt.source, 'hhs_ocr');
+  assert.match(receipt.error, /ENOENT/);
+  assert.equal(fs.existsSync(path.join(dir, 'hhs_ocr.manifest.json')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'applied.json')), false);
+});

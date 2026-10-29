@@ -166,6 +166,21 @@ jobs:
         if: github.event.inputs.dry_run != 'true'
         run: npm run build
 
+      # Retain the actual database export used by this build, separately from
+      # the source-observation manifests. A green export/build alone cannot
+      # establish which records reached the published site.
+      - name: Retain publication data for verification
+        if: github.event.inputs.dry_run != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-data
+          path: |
+            site/data/breaches.json
+            site/data/sources.json
+            site/data/litigation.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Deploy to Pages
         if: github.event.inputs.dry_run != 'true'
         uses: cloudflare/wrangler-action@v3

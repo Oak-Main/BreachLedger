@@ -43,7 +43,7 @@ const SOURCES = {
 const { validate, logReject } = require('./validate');
 const { assignSlugs } = require('./slug');
 const { buildStatements, batch } = require('./d1-writer');
-const { buildManifest, buildAppliedReceipt } = require('./manifest');
+const { buildManifest, buildAppliedReceipt, redact, runContext } = require('./manifest');
 const { score } = require('../severity/score');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -138,32 +138,6 @@ function applyStaged(dir, remote, expectSources) {
     );
   }
 
-  if (!files.length) {
-    console.error('ingest: every staged source reported no changes; nothing to apply');
-    // A no-op is still an applied outcome: the receipt says that the staged
-    // data was validated and nothing needed writing.
-    const noop = buildAppliedReceipt({
-      sources: staged.map((m) => ({
-        source: m.source,
-        coverage: m.coverage,
-        statements: m.statements,
-        durable_manifest: m.durable_manifest || null,
-        applied_batches: [],
-      })),
-      writtenSql: '',
-      remote,
-    });
-    fs.writeFileSync(path.join(dir, 'applied.json'), `${JSON.stringify(noop, null, 2)}\n`, 'utf8');
-    console.error(`ingest: applied receipt written to ${path.join(dir, 'applied.json')}`);
-    return;
-  }
-
-  // ONE D1 execution for the whole stage. Separate executions are separate
-  // transactions: if the second one fails -- a transient remote error, a quota
-  // error, a constraint error -- the first is already committed and the
-  // database is left holding a partial ingest that no rollback undoes. One
-  // execution is one operation, so the stage is applied or it is not.
-  const combined = files.map((f) => fs.readFileSync(f.file, 'utf8')).join('\n');
   // Verify every staged batch against the digest the manifest recorded when
   // it was staged. An edited or corrupted staged file must never be
   // applied, even though the receipt would merely report the difference
@@ -197,6 +171,33 @@ function applyStaged(dir, remote, expectSources) {
       }
     }
   }
+
+  if (!files.length) {
+    console.error('ingest: every staged source reported no changes; nothing to apply');
+    // A no-op is still an applied outcome: the receipt says that the staged
+    // data was validated and nothing needed writing.
+    const noop = buildAppliedReceipt({
+      sources: staged.map((m) => ({
+        source: m.source,
+        coverage: m.coverage,
+        statements: m.statements,
+        durable_manifest: m.durable_manifest || null,
+        applied_batches: [],
+      })),
+      writtenSql: '',
+      remote,
+    });
+    fs.writeFileSync(path.join(dir, 'applied.json'), `${JSON.stringify(noop, null, 2)}\n`, 'utf8');
+    console.error(`ingest: applied receipt written to ${path.join(dir, 'applied.json')}`);
+    return;
+  }
+
+  // ONE D1 execution for the whole stage. Separate executions are separate
+  // transactions: if the second one fails -- a transient remote error, a quota
+  // error, a constraint error -- the first is already committed and the
+  // database is left holding a partial ingest that no rollback undoes. One
+  // execution is one operation, so the stage is applied or it is not.
+  const combined = files.map((f) => fs.readFileSync(f.file, 'utf8')).join('\n');
 
   console.error(
     `ingest: applying ${files.length} staged batch(es) from ${dir} in ONE D1 operation ` +
@@ -554,6 +555,21 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`ingest FAILED: ${err.message}`);
+  // Fetch failures happen before a validated manifest exists. Retain a small,
+  // sanitised failure receipt too; it is never an applied-data receipt.
+  const sourceId = arg('source', 'hhs_ocr');
+  if (!arg('apply') && SOURCES[sourceId]) {
+    const dir = arg('manifest-dir', path.join(ROOT, '.wrangler', 'ingest-manifest'));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${sourceId}.failure.json`), JSON.stringify({
+      schema: 'breachledger/ingest-failure@1',
+      run: runContext(),
+      source: sourceId,
+      coverage: arg('coverage', 'all'),
+      failed_at: new Date().toISOString(),
+      error: redact(err.message),
+    }, null, 2) + '\n');
+  }
+  console.error(`ingest FAILED: ${redact(err.message)}`);
   process.exit(1);
 });
