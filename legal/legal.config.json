@@ -1,0 +1,18 @@
+{
+  "site_name": "BreachBook",
+  "site_url": "https://breachbook.org",
+  "legal_entity": "{{LEGAL_ENTITY}}",
+  "postal_address": "{{POSTAL_ADDRESS}}",
+  "contact_email": "{{CONTACT_EMAIL}}",
+  "governing_law": "California",
+  "effective_date": "{{EFFECTIVE_DATE}}",
+  "analytics": [
+    "Cloudflare Web Analytics (Cloudflare, Inc.)",
+    "Google Analytics 4 (Google LLC)"
+  ],
+  "amazon": false,
+  "pages": [
+    "terms"
+  ],
+  "disclosure_url": "/affiliate-disclosure/"
+}
