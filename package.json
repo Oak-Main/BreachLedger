@@ -9,7 +9,7 @@
     "workers/*"
   ],
   "scripts": {
-    "build": "node site/build.js",
+    "build": "node scripts/legal-build.mjs --check-only && node site/build.js && node scripts/legal-build.mjs --out dist",
     "db:migrate": "wrangler d1 migrations apply breachledger --local",
     "db:migrate:remote": "wrangler d1 migrations apply breachledger --remote",
     "db:seed": "node packages/schema/seed/load.js --out .wrangler/tmp-seed.sql && wrangler d1 execute breachledger --local --file .wrangler/tmp-seed.sql",

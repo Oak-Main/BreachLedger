@@ -1,0 +1,18 @@
+{
+  "site_name": "BreachBook",
+  "site_url": "https://breachbook.org",
+  "legal_entity": "Oak and Main Developers LLC",
+  "postal_address": "1223 Cleveland Ave, Suite 200, San Diego, CA 92103",
+  "contact_email": "corrections@breachbook.org",
+  "governing_law": "California",
+  "effective_date": "November 10, 2026",
+  "analytics": [
+    "Cloudflare Web Analytics (Cloudflare, Inc.)",
+    "Google Analytics 4 (Google LLC)"
+  ],
+  "amazon": false,
+  "pages": [
+    "terms"
+  ],
+  "disclosure_url": "/affiliate-disclosure/"
+}
