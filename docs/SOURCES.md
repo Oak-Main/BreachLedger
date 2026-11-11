@@ -88,7 +88,7 @@ than appearing complete.
 
 ## Contact and error reports
 
-BreachBook is published by Oak and Main Developers LLC, 2108 N St., Sacramento, CA 95816. See
+BreachBook is published by Oak and Main Developers LLC, {{POSTAL_ADDRESS}}. See
 [about](/about/) for the publisher of record.
 
 Corrections and source disputes go to **corrections@breachbook.org** — include the page URL and a citation to

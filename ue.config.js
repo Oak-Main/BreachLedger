@@ -4,6 +4,9 @@
 // site to dist/ for Cloudflare Pages. Anything that must not trigger a rebuild
 // (settlement countdowns, "added this week") is served from KV by workers/api.
 
+const { legalPostalAddress, parseUsAddress } = require('./site/postal.js');
+const publisherAddress = parseUsAddress(legalPostalAddress());
+
 module.exports = {
   site: {
     name: 'BreachBook',
@@ -20,10 +23,8 @@ module.exports = {
     // makes the record credible rather than merely available.
     publisher: {
       name: 'Oak and Main Developers LLC',
-      streetAddress: '2108 N St.',
-      addressLocality: 'Sacramento',
-      addressRegion: 'CA',
-      postalCode: '95816',
+      // From legal/legal.config.json (site/postal.js): one address site-wide.
+      ...publisherAddress,
       addressCountry: 'US',
       email: 'corrections@breachbook.org',
     },
