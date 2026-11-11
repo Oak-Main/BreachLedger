@@ -9,7 +9,7 @@ BreachBook is a public record of disclosed U.S. data breaches. It is compiled an
 | --- | --- |
 | Publisher | Oak and Main Developers LLC |
 | Jurisdiction | California, United States |
-| Mailing address | 2108 N St., Sacramento, CA 95816 |
+| Mailing address | {{POSTAL_ADDRESS}} |
 | Corrections | corrections@breachbook.org |
 | General enquiries | hello@breachbook.org |
 | Security reports | security@breachbook.org |

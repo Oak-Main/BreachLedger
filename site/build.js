@@ -10,6 +10,7 @@ const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '..');
 const config = require(path.join(ROOT, 'ue.config.js'));
+const { fillPostalAddress } = require('./postal.js');
 const { renderMarkdown } = require('./templates/markdown');
 const { pageCount } = require('./templates/breach-table');
 const { ga4Bootstrap } = require('./templates/layout');
@@ -51,7 +52,8 @@ function readData(name) {
 
 function readDoc(name) {
   const p = path.join(DOCS, name);
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  // Docs say {{POSTAL_ADDRESS}}; the address itself lives in legal/legal.config.json.
+  return fs.existsSync(p) ? fillPostalAddress(fs.readFileSync(p, 'utf8')) : '';
 }
 
 function writePage(routePath, html) {

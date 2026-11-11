@@ -3,7 +3,7 @@
 BreachBook measures its aggregate traffic with Google Analytics and collects nothing else about the
 people who read it.
 
-This site is published by Oak and Main Developers LLC, 2108 N St., Sacramento, CA 95816. Questions
+This site is published by Oak and Main Developers LLC, {{POSTAL_ADDRESS}}. Questions
 about this policy go to corrections@breachbook.org; see [about](/about/) for the publisher of record.
 
 ## What this site collects
