@@ -15,7 +15,7 @@ Google sets cookies (`_ga` and `_ga_*`) to do this and processes the data under
 [browser add-on](https://tools.google.com/dlpage/gaoptout) or any content blocker. Cloudflare Web
 Analytics also counts page views in aggregate; it sets no cookies.
 
-There is no advertising, no tracking pixel, no embedded video, and no web fonts. There are no
+There is no advertising, no embedded video, and no web fonts. There are no
 accounts, and nothing on this site asks a reader for personal information.
 
 This is enforced, not merely intended. Every page is served with a Content-Security-Policy that
@@ -24,6 +24,14 @@ the Google Analytics and Cloudflare Web Analytics hosts. Any other tracker added
 blocked by the browser before it could send anything. The build fails if any script other than
 those analytics tags, a static metadata block, or the [scan tool](/scan/)'s own script reaches a
 page.
+
+## Analytics
+
+We use Google Analytics 4, loaded through Google's gtag.js script, to count visits and see which
+pages are read. It sets first-party cookies (_ga and _ga_<ID>) that hold a random identifier, and
+it records your approximate location, device and browser type, the page that referred you and the
+pages you view. We do not use it to identify you and we do not sell this data. You can block these
+cookies in your browser settings or use Google's opt-out at https://tools.google.com/dlpage/gaoptout.
 
 ## What the server necessarily sees
 
