@@ -12,7 +12,7 @@ function render(ctx) {
     route: '/privacy',
     title: 'Privacy',
     description:
-      'BreachBook measures aggregate traffic with Google Analytics, which sets cookies, and collects nothing else about its readers: no advertising, no tracking pixels, no accounts.',
+      'BreachBook measures aggregate traffic with Google Analytics, which sets cookies, and collects nothing else about its readers: no advertising, no accounts.',
     content,
   });
 }
